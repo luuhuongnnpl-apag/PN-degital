@@ -4,39 +4,46 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font:15px Arial,sans-serif;max-width:760px;margin:36px auto;padding:0 18px;color:#1f2937}
-    h1{font-size:24px} .panel{border:1px solid #d1d5db;border-radius:12px;padding:18px;margin:18px 0}
+    body{font:15px Arial,sans-serif;max-width:900px;margin:32px auto;padding:0 18px;color:#1f2937}
+    h1{font-size:24px}.panel{border:1px solid #d1d5db;border-radius:12px;padding:18px;margin:18px 0}
     button{background:#173b67;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:600;cursor:pointer}
-    button:disabled{opacity:.5;cursor:wait} #result{white-space:pre-wrap;line-height:1.6}
-    .muted{color:#64748b;font-size:13px}
+    button:disabled{opacity:.5;cursor:wait}.muted{color:#64748b;font-size:13px}
+    #result{white-space:pre-wrap;line-height:1.6}.item{padding:10px 0;border-top:1px solid #e5e7eb}
+    a{color:#174a7e}
   </style>
 </head>
 <body>
   <h1>PN Digital – Kết nối Google Drive</h1>
-  <p>Thử nghiệm lập chỉ mục CTĐT ngành Luật. Công cụ chỉ đọc metadata; không sửa, di chuyển hoặc xóa tài liệu nguồn.</p>
+  <p>Thử nghiệm tìm kiếm tài liệu CTĐT ngành Luật. Công cụ chỉ tìm kiếm và đọc metadata; không tạo, sửa, di chuyển hoặc xóa tệp/thư mục Drive.</p>
   <div class="panel">
-    <strong>Phạm vi quét</strong>
-    <p>Toàn bộ tệp mà tài khoản triển khai có quyền truy cập. Ảnh, video và nhóm tên/thư mục có dấu hiệu cá nhân, gia đình hoặc giấy tờ nhạy cảm được loại trừ theo quy tắc.</p>
-    <p class="muted">Kết quả là danh sách gợi ý, cần rà soát trước khi công bố. Bộ lọc theo tên và thư mục không thể bảo đảm nhận diện tuyệt đối tài liệu riêng tư.</p>
-    <button id="scan" onclick="scan()">Quét Drive và lập chỉ mục CTĐT ngành Luật</button>
+    <strong>Phạm vi thử nghiệm</strong>
+    <p>Tìm các tệp có dấu hiệu liên quan đến “CTĐT” hoặc “chương trình đào tạo”, tối đa 800 kết quả ứng viên. Ảnh, video và tên tệp có dấu hiệu chứa thông tin cá nhân/nhạy cảm được loại trừ.</p>
+    <p class="muted">Đây là tìm kiếm có điều kiện, không phải kiểm kê toàn bộ Drive. Phân loại tự động chỉ mang tính gợi ý; cần kiểm tra thủ công. Tệp ảnh học thuật cũng tạm thời không nằm trong kết quả.</p>
+    <button id="scan" onclick="scan()">Tìm tài liệu CTĐT ngành Luật</button>
   </div>
-  <div class="panel"><strong>Kết quả</strong><div id="result">Chưa thực hiện quét.</div></div>
+  <div class="panel"><strong>Kết quả</strong><div id="result">Chưa thực hiện tìm kiếm.</div><div id="items"></div></div>
   <script>
     function scan(){
-      const b=document.getElementById('scan'),r=document.getElementById('result');
-      b.disabled=true;r.textContent='Đang quét metadata Google Drive...';
+      const b=document.getElementById('scan'),r=document.getElementById('result'),list=document.getElementById('items');
+      b.disabled=true;r.textContent='Đang tìm các tệp liên quan trong Google Drive...';list.innerHTML='';
       google.script.run.withSuccessHandler(x=>{
-        r.textContent='Hoàn tất.\n'+
-          'Tệp đã quét: '+x.scanned+'\n'+
-          'Tài liệu phù hợp: '+x.matched+'\n'+
+        r.textContent='Đã hoàn tất tìm kiếm.\n'+
+          'Tệp ứng viên: '+x.candidates+'\n'+
           'Đã loại trừ: '+x.excluded+'\n'+
+          'Gợi ý CTĐT ban hành: '+x.issued+'\n'+
+          'Gợi ý hồ sơ xây dựng: '+x.development+'\n'+
           'Chờ phân loại: '+x.pending+'\n'+
-          'Chạm giới hạn quét: '+(x.truncated?'Có':'Không')+'\n'+
-          'Tệp chỉ mục: '+x.indexFile+'\n'+
-          'Thư mục kết quả: '+x.folder+'\n'+
-          'Thời gian: '+x.durationSeconds+' giây';
+          'Hiển thị tối đa: '+x.preview.length+'\n'+
+          'Chạm giới hạn ứng viên: '+(x.candidateLimitReached?'Có':'Không')+'\n'+
+          'Thời gian: '+x.durationSeconds+' giây\n'+x.note;
+        x.preview.forEach(item=>{
+          const div=document.createElement('div');div.className='item';
+          const a=document.createElement('a');a.href=item.url;a.target='_blank';a.rel='noopener';a.textContent=item.name;
+          const meta=document.createElement('div');meta.className='muted';meta.textContent=item.category+' · '+item.mimeType+' · '+item.modifiedTime;
+          div.appendChild(a);div.appendChild(meta);list.appendChild(div);
+        });
         b.disabled=false;
-      }).withFailureHandler(e=>{r.textContent='Lỗi: '+e.message;b.disabled=false;}).scanLawCurriculum();
+      }).withFailureHandler(e=>{r.textContent='Lỗi: '+(e&&e.message?e.message:e);b.disabled=false;}).scanLawCurriculum();
     }
   </script>
 </body></html>
