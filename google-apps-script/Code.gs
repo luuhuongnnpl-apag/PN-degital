@@ -119,7 +119,6 @@ function updateDocument(id, changes) {
   if(!row) throw new Error("Không tìm thấy tài liệu trong danh mục.");
   if(changes.category && PND.CATEGORIES.includes(changes.category)) sh.getRange(row,9).setValue(changes.category);
   if(typeof changes.pinned==="boolean") sh.getRange(row,8).setValue(changes.pinned);
-  sh.getSheetByName; // intentional no-op avoided below
   db_().getSheetByName("Activity").appendRow([new Date(),"UPDATE_METADATA",id,changes.category||"PIN",Session.getActiveUser().getEmail()]);
   return {ok:true};
 }
