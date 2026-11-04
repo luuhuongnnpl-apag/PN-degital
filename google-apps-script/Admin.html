@@ -1,49 +1,37 @@
 <!doctype html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    body{font:15px Arial,sans-serif;max-width:900px;margin:32px auto;padding:0 18px;color:#1f2937}
-    h1{font-size:24px}.panel{border:1px solid #d1d5db;border-radius:12px;padding:18px;margin:18px 0}
-    button{background:#173b67;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:600;cursor:pointer}
-    button:disabled{opacity:.5;cursor:wait}.muted{color:#64748b;font-size:13px}
-    #result{white-space:pre-wrap;line-height:1.6}.item{padding:10px 0;border-top:1px solid #e5e7eb}
-    a{color:#174a7e}
-  </style>
-</head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font:15px Arial,sans-serif;max-width:900px;margin:32px auto;padding:0 18px;color:#1f2937}
+h1{font-size:24px}.panel{border:1px solid #d1d5db;border-radius:12px;padding:18px;margin:18px 0}
+button{background:#173b67;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}.muted{color:#64748b;font-size:13px}
+#result{white-space:pre-wrap;line-height:1.6}.item{padding:10px 0;border-top:1px solid #e5e7eb}a{color:#174a7e}
+</style></head>
 <body>
-  <h1>PN Digital – Kết nối Google Drive</h1>
-  <p>Thử nghiệm tìm kiếm tài liệu CTĐT ngành Luật. Công cụ chỉ tìm kiếm và đọc metadata; không tạo, sửa, di chuyển hoặc xóa tệp/thư mục Drive.</p>
-  <div class="panel">
-    <strong>Phạm vi thử nghiệm</strong>
-    <p>Tìm các tệp có dấu hiệu liên quan đến “CTĐT” hoặc “chương trình đào tạo”, tối đa 800 kết quả ứng viên. Ảnh, video và tên tệp có dấu hiệu chứa thông tin cá nhân/nhạy cảm được loại trừ.</p>
-    <p class="muted">Đây là tìm kiếm có điều kiện, không phải kiểm kê toàn bộ Drive. Phân loại tự động chỉ mang tính gợi ý; cần kiểm tra thủ công. Tệp ảnh học thuật cũng tạm thời không nằm trong kết quả.</p>
-    <button id="scan" onclick="scan()">Tìm tài liệu CTĐT ngành Luật</button>
-  </div>
-  <div class="panel"><strong>Kết quả</strong><div id="result">Chưa thực hiện tìm kiếm.</div><div id="items"></div></div>
-  <script>
-    function scan(){
-      const b=document.getElementById('scan'),r=document.getElementById('result'),list=document.getElementById('items');
-      b.disabled=true;r.textContent='Đang tìm các tệp liên quan trong Google Drive...';list.innerHTML='';
-      google.script.run.withSuccessHandler(x=>{
-        r.textContent='Đã hoàn tất tìm kiếm.\n'+
-          'Tệp ứng viên: '+x.candidates+'\n'+
-          'Đã loại trừ: '+x.excluded+'\n'+
-          'Gợi ý CTĐT ban hành: '+x.issued+'\n'+
-          'Gợi ý hồ sơ xây dựng: '+x.development+'\n'+
-          'Chờ phân loại: '+x.pending+'\n'+
-          'Hiển thị tối đa: '+x.preview.length+'\n'+
-          'Chạm giới hạn ứng viên: '+(x.candidateLimitReached?'Có':'Không')+'\n'+
-          'Thời gian: '+x.durationSeconds+' giây\n'+x.note;
-        x.preview.forEach(item=>{
-          const div=document.createElement('div');div.className='item';
-          const a=document.createElement('a');a.href=item.url;a.target='_blank';a.rel='noopener';a.textContent=item.name;
-          const meta=document.createElement('div');meta.className='muted';meta.textContent=item.category+' · '+item.mimeType+' · '+item.modifiedTime;
-          div.appendChild(a);div.appendChild(meta);list.appendChild(div);
-        });
-        b.disabled=false;
-      }).withFailureHandler(e=>{r.textContent='Lỗi: '+(e&&e.message?e.message:e);b.disabled=false;}).scanLawCurriculum();
-    }
-  </script>
-</body></html>
+<h1>PN Digital – Kết nối Google Drive</h1>
+<p>Tìm kiếm thử nghiệm tài liệu CTĐT ngành Luật. Công cụ chỉ tìm theo tên tệp và đọc metadata tối thiểu; không sửa, di chuyển, tạo hoặc xóa tài liệu.</p>
+<div class="panel"><strong>Phạm vi</strong>
+<p>Tìm theo ba cụm từ trong tên tệp, tối đa 120 kết quả. Không quét toàn bộ nội dung Drive và không đọc nội dung tài liệu.</p>
+<p class="muted">Ảnh, video và một số tên tệp có dấu hiệu cá nhân/nhạy cảm được loại trừ. Kết quả phân loại chỉ là gợi ý cần rà soát.</p>
+<button id="scan" onclick="scan()">Tìm tài liệu CTĐT ngành Luật</button></div>
+<div class="panel"><strong>Kết quả</strong><div id="result">Chưa thực hiện tìm kiếm.</div><div id="items"></div></div>
+<script>
+function scan(){
+ const b=document.getElementById('scan'),r=document.getElementById('result'),list=document.getElementById('items');
+ b.disabled=true;r.textContent='Đang tìm theo tên tệp...';list.innerHTML='';
+ google.script.run.withSuccessHandler(x=>{
+  r.textContent='Hoàn tất.\nTệp phù hợp: '+x.candidates+'\nĐã loại trừ: '+x.excluded+
+   '\nCTĐT ban hành (gợi ý): '+x.issued+'\nHồ sơ xây dựng (gợi ý): '+x.development+
+   '\nChờ phân loại: '+x.pending+'\nĐạt giới hạn: '+(x.truncated?'Có':'Không')+
+   '\nThời gian: '+x.durationSeconds+' giây\n'+x.note;
+  x.preview.forEach(item=>{
+   const d=document.createElement('div');d.className='item';
+   const a=document.createElement('a');a.href=item.url;a.target='_blank';a.rel='noopener';a.textContent=item.name;
+   const m=document.createElement('div');m.className='muted';m.textContent=item.category+' · '+item.mimeType;
+   d.appendChild(a);d.appendChild(m);list.appendChild(d);
+  });b.disabled=false;
+ }).withFailureHandler(e=>{r.textContent='Lỗi: '+(e&&e.message?e.message:e);b.disabled=false;}).scanLawCurriculum();
+}
+</script></body></html>
