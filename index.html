@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Phúc Nguyên Digital Library - hệ thống quản lý và tra cứu tài liệu học thuật.">
-<title>Phúc Nguyên Digital Library</title>
+<meta name="description" content="Phúc Nguyên Digital - hệ thống quản lý và tra cứu tài liệu học thuật.">
+<title>Phúc Nguyên Digital</title>
 <style>
 :root{--ink:#172b4d;--muted:#66758b;--line:#e5eaf1;--blue:#174a7e;--pale:#f3f7fb;--gold:#c49a45}
 *{box-sizing:border-box}body{margin:0;background:#f6f8fb;color:var(--ink);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -17,38 +17,64 @@ main{max-width:1180px;margin:32px auto;padding:0 22px}.hero{background:linear-gr
 .search{display:flex;background:white;padding:6px;border-radius:10px;max-width:650px}.search input{flex:1;min-width:0;border:0;outline:0;padding:12px;color:var(--ink);font:inherit}.search button{border:0;border-radius:7px;background:#d1ad66;color:#172b4d;padding:0 19px;font-weight:700;cursor:pointer}
 .hero-note{border:1px solid #ffffff38;background:#ffffff12;border-radius:14px;padding:22px}.hero-note b{font-size:27px;display:block}.hero-note span{color:#dce8f2;font-size:13px}
 .section-head{display:flex;align-items:end;justify-content:space-between;margin:32px 0 15px}.section-head h2{font-size:20px;margin:0}.section-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px}.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:19px;min-height:140px;transition:.2s}.card:hover{transform:translateY(-2px);box-shadow:0 8px 22px #193b5b10}.icon{width:38px;height:38px;border-radius:10px;background:#edf3f8;display:grid;place-items:center;color:var(--blue);font-size:19px}.card h3{font-size:15px;margin:12px 0 3px}.card p{font-size:12px;color:var(--muted);margin:0}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px}.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:19px;min-height:140px;transition:.2s;display:block}.card:hover{transform:translateY(-2px);box-shadow:0 8px 22px #193b5b10;border-color:#c9d6e4}.icon{width:38px;height:38px;border-radius:10px;background:#edf3f8;display:grid;place-items:center;color:var(--blue);font-size:19px}.card h3{font-size:15px;margin:12px 0 3px}.card p{font-size:12px;color:var(--muted);margin:0}
 .panel{background:white;border:1px solid var(--line);border-radius:13px;padding:20px}.empty{padding:24px;text-align:center;color:var(--muted);font-size:13px;background:#fafbfd;border:1px dashed #d8e0ea;border-radius:10px}
+.featured-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.feature-slot{background:#fff;border:1px dashed #cbd6e2;border-radius:12px;padding:17px;min-height:118px;display:flex;flex-direction:column;justify-content:space-between}.feature-slot .slot-label{font-size:10px;font-weight:700;letter-spacing:1px;color:#9a7a3e;text-transform:uppercase}.feature-slot strong{font-size:14px}.feature-slot small{font-size:12px;color:var(--muted)}
 footer{max-width:1180px;margin:35px auto 0;padding:22px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
-@media(max-width:800px){.hero{grid-template-columns:1fr;padding:26px}.hero h1{font-size:28px}.grid{grid-template-columns:repeat(2,1fr)}nav{display:none}.head{padding:16px 22px}}
-@media(max-width:480px){.top{font-size:11px}.hero{padding:22px}.hero h1{font-size:25px}.search button{padding:0 12px}.grid{grid-template-columns:1fr 1fr;gap:10px}.card{padding:14px}.section-head{align-items:start;flex-direction:column}}
+@media(max-width:800px){.hero{grid-template-columns:1fr;padding:26px}.hero h1{font-size:28px}.grid,.featured-grid{grid-template-columns:repeat(2,1fr)}nav{display:none}.head{padding:16px 22px}}
+@media(max-width:480px){.top{font-size:11px}.hero{padding:22px}.hero h1{font-size:25px}.search button{padding:0 12px}.grid,.featured-grid{grid-template-columns:1fr 1fr;gap:10px}.card{padding:14px}.section-head{align-items:start;flex-direction:column}}
 </style>
 </head>
 <body>
 <div class="top"><span>PHÚC NGUYÊN • HỆ SINH THÁI TRI THỨC SỐ</span><span>Không gian lưu trữ và tra cứu học thuật</span></div>
 <header><div class="head">
 <a class="brand" href="./"><span class="mark">PN</span><span><strong>PHÚC NGUYÊN DIGITAL</strong><small>Digital Library · Thư viện số</small></span></a>
-<nav><a href="#home">Trang chủ</a><a href="#catalog">Danh mục</a><a href="#recent">Tài liệu mới</a><a href="#about">Giới thiệu</a></nav>
+<nav><a href="#home">Trang chủ</a><a href="#catalog">Danh mục</a><a href="#pinned">Tài liệu ghim</a><a href="#recent">Mới cập nhật</a></nav>
 </div></header>
 <main id="home">
 <section class="hero">
-<div><div class="eyebrow">Tri thức · Kết nối · Khám phá</div><h1>Không gian tri thức<br>trong tầm tay</h1><p>Một điểm truy cập tập trung để tổ chức, quản lý và tìm kiếm tài liệu giảng dạy, nghiên cứu khoa học và văn bản chuyên ngành.</p>
+<div><div class="eyebrow">Tri thức · Kết nối · Khám phá</div><h1>Không gian tri thức<br>trong tầm tay</h1><p>Một điểm truy cập tập trung để tổ chức, quản lý và tìm kiếm tài liệu giảng dạy, nghiên cứu, quản trị và các lĩnh vực chuyên môn.</p>
 <form class="search" id="searchForm"><input id="q" type="search" placeholder="Tìm tên tài liệu, chủ đề, học phần..." aria-label="Tìm kiếm tài liệu"><button type="submit">Tìm kiếm</button></form>
 </div>
-<div class="hero-note"><b>01</b><span>Không gian thư viện đang được khởi tạo. Kết nối Google Drive sẽ được triển khai ở giai đoạn tiếp theo.</span></div>
+<div class="hero-note"><b>PN DIGITAL</b><span>Kho dữ liệu gốc được lưu trữ trên Google Drive. Website sẽ kết nối thông qua lớp trung gian an toàn để đồng bộ danh mục và liên kết tài liệu.</span></div>
 </section>
-<div class="section-head" id="catalog"><div><h2>Danh mục thư viện</h2><p>Các nhóm tài liệu dự kiến được quản lý tập trung</p></div></div>
-<section class="grid">
-<a class="card" href="#recent"><span class="icon">⚖</span><h3>Pháp luật</h3><p>Văn bản quy phạm, giáo trình, tài liệu pháp lý</p></a>
-<a class="card" href="#recent"><span class="icon">▤</span><h3>Giảng dạy</h3><p>Bài giảng, đề cương, học liệu và ngân hàng câu hỏi</p></a>
-<a class="card" href="#recent"><span class="icon">⌕</span><h3>Nghiên cứu khoa học</h3><p>Bài báo, đề tài, chuyên khảo và tham luận</p></a>
-<a class="card" href="#recent"><span class="icon">▦</span><h3>Quản trị công</h3><p>Chính sách, quản lý nhà nước và hành chính công</p></a>
+
+<div class="section-head" id="catalog"><div><h2>Danh mục thư viện</h2><p>Tám nhóm tài liệu được tổ chức theo nhu cầu khai thác</p></div></div>
+<section class="grid" aria-label="Tám danh mục thư viện">
+<a class="card" href="#recent" data-category="chuong-trinh-dao-tao"><span class="icon">▤</span><h3>Chương trình đào tạo</h3><p>Chương trình, khung chương trình, chuẩn đầu ra và ma trận.</p></a>
+<a class="card" href="#recent" data-category="de-cuong"><span class="icon">☷</span><h3>Đề cương</h3><p>Đề cương học phần, kế hoạch giảng dạy và ma trận đánh giá.</p></a>
+<a class="card" href="#recent" data-category="tai-lieu-giang-day"><span class="icon">▣</span><h3>Tài liệu giảng dạy</h3><p>Bài giảng, giáo trình, tình huống, câu hỏi và học liệu.</p></a>
+<a class="card" href="#recent" data-category="nghien-cuu-khoa-hoc"><span class="icon">⌕</span><h3>Nghiên cứu khoa học</h3><p>Đề tài, bài báo, tham luận, chuyên khảo và báo cáo.</p></a>
+<a class="card" href="#recent" data-category="van-ban-quy-che"><span class="icon">⚖</span><h3>Văn bản quy chế</h3><p>Quy chế, quy định, hướng dẫn và văn bản quản lý.</p></a>
+<a class="card" href="#recent" data-category="y-hoc-suc-khoe"><span class="icon">✚</span><h3>Y học - Sức khỏe</h3><p>Tài liệu y học, dinh dưỡng, sức khỏe và khoa học vận động.</p></a>
+<a class="card" href="#recent" data-category="the-thao-van-dong"><span class="icon">⌁</span><h3>Thể thao vận động</h3><p>Huấn luyện, thể lực, vận động và khoa học thể thao.</p></a>
+<a class="card" href="#recent" data-category="tai-lieu-khac"><span class="icon">▧</span><h3>Tài liệu khác</h3><p>Các tài liệu tham khảo chưa thuộc nhóm chuyên biệt.</p></a>
 </section>
-<div class="section-head" id="recent"><div><h2>Tài liệu mới cập nhật</h2><p>Danh sách sẽ hiển thị sau khi hoàn tất kết nối kho dữ liệu</p></div></div>
-<section class="panel"><div class="empty">Chưa kết nối Google Drive · Chưa có dữ liệu tài liệu.<br>Kho tài liệu gốc vẫn được giữ nguyên trên Google Drive.</div></section>
+
+<div class="section-head" id="pinned"><div><h2>Tài liệu ghim</h2><p>Khu vực ưu tiên cho tài liệu trọng điểm, thường xuyên sử dụng</p></div></div>
+<section class="featured-grid" aria-label="Vị trí tài liệu ghim">
+<div class="feature-slot"><span class="slot-label">Ghim 01</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
+<div class="feature-slot"><span class="slot-label">Ghim 02</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
+<div class="feature-slot"><span class="slot-label">Ghim 03</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
+<div class="feature-slot"><span class="slot-label">Ghim 04</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
+</section>
+
+<div class="section-head" id="recent"><div><h2>Tài liệu mới cập nhật</h2><p>Tự động sắp xếp theo thời điểm cập nhật sau khi kết nối kho dữ liệu</p></div></div>
+<section class="panel"><div class="empty" id="emptyState">Chưa có dữ liệu tài liệu được đồng bộ.<br>Tài liệu gốc trên Google Drive không bị di chuyển hoặc thay đổi.</div></section>
 </main>
-<footer id="about">© 2026 Phúc Nguyên Digital Library · Phiên bản thử nghiệm giao diện 0.1</footer>
+<footer id="about">© 2026 Phúc Nguyên Digital · Phiên bản giao diện 0.2</footer>
 <script>
-document.getElementById('searchForm').addEventListener('submit',function(e){e.preventDefault();const q=document.getElementById('q').value.trim();if(q)alert('Chức năng tìm kiếm sẽ được kích hoạt sau khi kết nối Google Drive. Từ khóa: '+q);});
+document.getElementById('searchForm').addEventListener('submit',function(e){
+ e.preventDefault();
+ const q=document.getElementById('q').value.trim();
+ if(q) alert('Kho dữ liệu chưa được kết nối. Từ khóa "'+q+'" sẽ được sử dụng khi hoàn tất đồng bộ Google Drive.');
+});
+document.querySelectorAll('[data-category]').forEach(function(card){
+ card.addEventListener('click',function(){
+  const title=card.querySelector('h3').textContent;
+  document.getElementById('emptyState').innerHTML='Đang chọn danh mục: <strong>'+title+'</strong><br>Danh sách tài liệu sẽ xuất hiện sau khi kết nối và đồng bộ Google Drive.';
+ });
+});
 </script>
-</body></html>
+</body>
+</html>
