@@ -1,13 +1,12 @@
 /**
- * PN Digital - Drive metadata search (read-only)
- * Pilot: CTĐT ngành Luật. Source files are never changed.
- * Search is narrowed to likely curriculum-related files to avoid a full-Drive walk.
+ * PN Digital - lightweight Google Drive title search.
+ * Read-only pilot for CTĐT ngành Luật. Never modifies source files.
  */
 const CONFIG = {
-  MAX_CANDIDATES: 800,
-  MAX_PREVIEW: 150,
+  MAX_PER_QUERY: 60,
+  MAX_TOTAL: 120,
   EXCLUDED_MIME_PREFIXES: ["image/", "video/"],
-  EXCLUDED_NAME_TERMS: [
+  EXCLUDED_TERMS: [
     "anh gia dinh", "anh ca nhan", "family photo", "personal photo",
     "ho chieu", "passport", "can cuoc", "cccd", "cmnd",
     "so tai khoan", "bank statement", "sao ke", "mat khau", "password"
@@ -23,56 +22,57 @@ function getStatus() {
   return {
     connected: true,
     account: Session.getEffectiveUser().getEmail() || "Tài khoản đang đăng nhập",
-    scope: "Chỉ đọc metadata và tìm kiếm nội dung được Drive lập chỉ mục",
+    scope: "Chỉ đọc tên tệp và metadata tối thiểu",
     pilot: "CTĐT ngành Luật"
   };
 }
 
 /**
- * Search only likely CTĐT candidates. No folder/file is created or modified.
- * DriveApp.searchFiles uses Drive search syntax; candidate search is much faster
- * than enumerating every file and querying every parent folder.
+ * Searches filenames only, in small independent queries.
+ * Avoids fullText search, whole-Drive iteration, parent-folder lookups,
+ * and per-file modification-time/size calls.
  */
 function scanLawCurriculum() {
   const started = Date.now();
-  const query = [
-    "trashed = false",
-    "(" +
-      "title contains 'CTĐT' or " +
-      "title contains 'chương trình đào tạo' or " +
-      "title contains 'chuong trinh dao tao' or " +
-      "fullText contains 'CTĐT' or " +
-      "fullText contains 'chương trình đào tạo'" +
-    ")"
-  ].join(" and ");
+  const queries = [
+    "trashed = false and title contains 'CTĐT'",
+    "trashed = false and title contains 'chương trình đào tạo'",
+    "trashed = false and title contains 'chuong trinh dao tao'"
+  ];
+  const seen = {};
+  const preview = [];
+  let found = 0, excluded = 0, issued = 0, development = 0, pending = 0;
 
-  const iterator = DriveApp.searchFiles(query);
-  const records = [];
-  let candidates = 0, excluded = 0, issued = 0, development = 0, pending = 0;
-  while (iterator.hasNext() && candidates < CONFIG.MAX_CANDIDATES) {
-    const file = iterator.next();
-    candidates++;
-    const mime = file.getMimeType() || "";
-    const name = file.getName();
-    const normalized = normalize_(name);
+  for (let q = 0; q < queries.length && found < CONFIG.MAX_TOTAL; q++) {
+    const files = DriveApp.searchFiles(queries[q]);
+    let inQuery = 0;
+    while (files.hasNext() && inQuery < CONFIG.MAX_PER_QUERY &&
+           found < CONFIG.MAX_TOTAL) {
+      const file = files.next();
+      inQuery++;
+      const id = file.getId();
+      if (seen[id]) continue;
+      seen[id] = true;
 
-    if (CONFIG.EXCLUDED_MIME_PREFIXES.some(p => mime.indexOf(p) === 0) ||
-        containsAny_(normalized, CONFIG.EXCLUDED_NAME_TERMS.map(normalize_))) {
-      excluded++;
-      continue;
-    }
+      const name = file.getName();
+      const mime = file.getMimeType() || "";
+      const normalized = normalize_(name);
+      if (CONFIG.EXCLUDED_MIME_PREFIXES.some(p => mime.indexOf(p) === 0) ||
+          containsAny_(normalized, CONFIG.EXCLUDED_TERMS.map(normalize_))) {
+        excluded++;
+        continue;
+      }
 
-    const category = classifyName_(normalized);
-    if (category === "CTĐT ban hành") issued++;
-    else if (category === "Hồ sơ xây dựng CTĐT") development++;
-    else pending++;
+      found++;
+      const category = classifyName_(normalized);
+      if (category === "CTĐT ban hành") issued++;
+      else if (category === "Hồ sơ xây dựng CTĐT") development++;
+      else pending++;
 
-    if (records.length < CONFIG.MAX_PREVIEW) {
-      records.push({
+      preview.push({
         name: name,
         mimeType: mime,
-        url: file.getUrl(),
-        modifiedTime: file.getLastUpdated().toISOString(),
+        url: "https://drive.google.com/open?id=" + id,
         category: category
       });
     }
@@ -80,17 +80,16 @@ function scanLawCurriculum() {
 
   return {
     ok: true,
-    mode: "targeted-read-only-search",
-    candidates: candidates,
+    mode: "filename-only",
+    candidates: found,
     excluded: excluded,
     issued: issued,
     development: development,
     pending: pending,
-    preview: records,
-    previewLimit: CONFIG.MAX_PREVIEW,
-    candidateLimitReached: candidates >= CONFIG.MAX_CANDIDATES,
+    preview: preview,
+    truncated: found >= CONFIG.MAX_TOTAL,
     durationSeconds: Math.round((Date.now() - started) / 1000),
-    note: "Kết quả tìm kiếm gợi ý theo metadata và nội dung Drive lập chỉ mục; cần rà soát thủ công."
+    note: "Chỉ tìm theo tên tệp; kết quả phân loại là gợi ý và cần rà soát."
   };
 }
 
