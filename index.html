@@ -1,80 +1,31 @@
-<!doctype html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Phúc Nguyên Digital - hệ thống quản lý và tra cứu tài liệu học thuật.">
-<title>Phúc Nguyên Digital</title>
-<style>
-:root{--ink:#172b4d;--muted:#66758b;--line:#e5eaf1;--blue:#174a7e;--pale:#f3f7fb;--gold:#c49a45}
-*{box-sizing:border-box}body{margin:0;background:#f6f8fb;color:var(--ink);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-a{color:inherit;text-decoration:none}.top{background:#102d4c;color:#fff;padding:12px max(22px,calc((100% - 1180px)/2));display:flex;justify-content:space-between;gap:15px;font-size:13px}
-header{background:#fff;border-bottom:1px solid var(--line)}.head{max-width:1180px;margin:auto;padding:22px;display:flex;align-items:center;justify-content:space-between;gap:20px}
-.brand{display:flex;align-items:center;gap:13px}.mark{width:46px;height:46px;border-radius:12px;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:800;font-size:18px}.brand strong{display:block;font-size:19px;letter-spacing:.2px}.brand small{color:var(--muted)}
-nav{display:flex;gap:23px;color:#40536c;font-size:14px}nav a:hover{color:var(--blue)}
-main{max-width:1180px;margin:32px auto;padding:0 22px}.hero{background:linear-gradient(115deg,#12395f,#1e5b88);color:white;border-radius:18px;padding:38px;display:grid;grid-template-columns:1.2fr .8fr;gap:25px;align-items:center;box-shadow:0 12px 32px #163b5b1c}
-.eyebrow{text-transform:uppercase;letter-spacing:1.6px;font-size:11px;color:#d8c18d;font-weight:700}.hero h1{font-size:34px;line-height:1.2;margin:10px 0 12px}.hero p{color:#e0eaf3;max-width:620px;margin:0 0 23px}
-.search{display:flex;background:white;padding:6px;border-radius:10px;max-width:650px}.search input{flex:1;min-width:0;border:0;outline:0;padding:12px;color:var(--ink);font:inherit}.search button{border:0;border-radius:7px;background:#d1ad66;color:#172b4d;padding:0 19px;font-weight:700;cursor:pointer}
-.hero-note{border:1px solid #ffffff38;background:#ffffff12;border-radius:14px;padding:22px}.hero-note b{font-size:27px;display:block}.hero-note span{color:#dce8f2;font-size:13px}
-.section-head{display:flex;align-items:end;justify-content:space-between;margin:32px 0 15px}.section-head h2{font-size:20px;margin:0}.section-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px}.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:19px;min-height:140px;transition:.2s;display:block}.card:hover{transform:translateY(-2px);box-shadow:0 8px 22px #193b5b10;border-color:#c9d6e4}.icon{width:38px;height:38px;border-radius:10px;background:#edf3f8;display:grid;place-items:center;color:var(--blue);font-size:19px}.card h3{font-size:15px;margin:12px 0 3px}.card p{font-size:12px;color:var(--muted);margin:0}
-.panel{background:white;border:1px solid var(--line);border-radius:13px;padding:20px}.empty{padding:24px;text-align:center;color:var(--muted);font-size:13px;background:#fafbfd;border:1px dashed #d8e0ea;border-radius:10px}
-.featured-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.feature-slot{background:#fff;border:1px dashed #cbd6e2;border-radius:12px;padding:17px;min-height:118px;display:flex;flex-direction:column;justify-content:space-between}.feature-slot .slot-label{font-size:10px;font-weight:700;letter-spacing:1px;color:#9a7a3e;text-transform:uppercase}.feature-slot strong{font-size:14px}.feature-slot small{font-size:12px;color:var(--muted)}
-footer{max-width:1180px;margin:35px auto 0;padding:22px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
-@media(max-width:800px){.hero{grid-template-columns:1fr;padding:26px}.hero h1{font-size:28px}.grid,.featured-grid{grid-template-columns:repeat(2,1fr)}nav{display:none}.head{padding:16px 22px}}
-@media(max-width:480px){.top{font-size:11px}.hero{padding:22px}.hero h1{font-size:25px}.search button{padding:0 12px}.grid,.featured-grid{grid-template-columns:1fr 1fr;gap:10px}.card{padding:14px}.section-head{align-items:start;flex-direction:column}}
-</style>
-</head>
-<body>
-<div class="top"><span>PHÚC NGUYÊN • HỆ SINH THÁI TRI THỨC SỐ</span><span>Không gian lưu trữ và tra cứu học thuật</span></div>
-<header><div class="head">
-<a class="brand" href="./"><span class="mark">PN</span><span><strong>PHÚC NGUYÊN DIGITAL</strong><small>Digital Library · Thư viện số</small></span></a>
-<nav><a href="#home">Trang chủ</a><a href="#catalog">Danh mục</a><a href="#pinned">Tài liệu ghim</a><a href="#recent">Mới cập nhật</a></nav>
-</div></header>
-<main id="home">
-<section class="hero">
-<div><div class="eyebrow">Tri thức · Kết nối · Khám phá</div><h1>Không gian tri thức<br>trong tầm tay</h1><p>Một điểm truy cập tập trung để tổ chức, quản lý và tìm kiếm tài liệu giảng dạy, nghiên cứu, quản trị và các lĩnh vực chuyên môn.</p>
-<form class="search" id="searchForm"><input id="q" type="search" placeholder="Tìm tên tài liệu, chủ đề, học phần..." aria-label="Tìm kiếm tài liệu"><button type="submit">Tìm kiếm</button></form>
-</div>
-<div class="hero-note"><b>PN DIGITAL</b><span>Kho dữ liệu gốc được lưu trữ trên Google Drive. Website sẽ kết nối thông qua lớp trung gian an toàn để đồng bộ danh mục và liên kết tài liệu.</span></div>
-</section>
-
-<div class="section-head" id="catalog"><div><h2>Danh mục thư viện</h2><p>Tám nhóm tài liệu được tổ chức theo nhu cầu khai thác</p></div></div>
-<section class="grid" aria-label="Tám danh mục thư viện">
-<a class="card" href="#recent" data-category="chuong-trinh-dao-tao"><span class="icon">▤</span><h3>Chương trình đào tạo</h3><p>Chương trình, khung chương trình, chuẩn đầu ra và ma trận.</p></a>
-<a class="card" href="#recent" data-category="de-cuong"><span class="icon">☷</span><h3>Đề cương</h3><p>Đề cương học phần, kế hoạch giảng dạy và ma trận đánh giá.</p></a>
-<a class="card" href="#recent" data-category="tai-lieu-giang-day"><span class="icon">▣</span><h3>Tài liệu giảng dạy</h3><p>Bài giảng, giáo trình, tình huống, câu hỏi và học liệu.</p></a>
-<a class="card" href="#recent" data-category="nghien-cuu-khoa-hoc"><span class="icon">⌕</span><h3>Nghiên cứu khoa học</h3><p>Đề tài, bài báo, tham luận, chuyên khảo và báo cáo.</p></a>
-<a class="card" href="#recent" data-category="van-ban-quy-che"><span class="icon">⚖</span><h3>Văn bản quy chế</h3><p>Quy chế, quy định, hướng dẫn và văn bản quản lý.</p></a>
-<a class="card" href="#recent" data-category="y-hoc-suc-khoe"><span class="icon">✚</span><h3>Y học - Sức khỏe</h3><p>Tài liệu y học, dinh dưỡng, sức khỏe và khoa học vận động.</p></a>
-<a class="card" href="#recent" data-category="the-thao-van-dong"><span class="icon">⌁</span><h3>Thể thao vận động</h3><p>Huấn luyện, thể lực, vận động và khoa học thể thao.</p></a>
-<a class="card" href="#recent" data-category="tai-lieu-khac"><span class="icon">▧</span><h3>Tài liệu khác</h3><p>Các tài liệu tham khảo chưa thuộc nhóm chuyên biệt.</p></a>
-</section>
-
-<div class="section-head" id="pinned"><div><h2>Tài liệu ghim</h2><p>Khu vực ưu tiên cho tài liệu trọng điểm, thường xuyên sử dụng</p></div></div>
-<section class="featured-grid" aria-label="Vị trí tài liệu ghim">
-<div class="feature-slot"><span class="slot-label">Ghim 01</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
-<div class="feature-slot"><span class="slot-label">Ghim 02</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
-<div class="feature-slot"><span class="slot-label">Ghim 03</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
-<div class="feature-slot"><span class="slot-label">Ghim 04</span><strong>Chưa ghim tài liệu</strong><small>Ưu tiên tài liệu dùng thường xuyên</small></div>
-</section>
-
-<div class="section-head" id="recent"><div><h2>Tài liệu mới cập nhật</h2><p>Tự động sắp xếp theo thời điểm cập nhật sau khi kết nối kho dữ liệu</p></div></div>
-<section class="panel"><div class="empty" id="emptyState">Chưa có dữ liệu tài liệu được đồng bộ.<br>Tài liệu gốc trên Google Drive không bị di chuyển hoặc thay đổi.</div></section>
-</main>
-<footer id="about">© 2026 Phúc Nguyên Digital · Phiên bản giao diện 0.2</footer>
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phúc Nguyên Digital</title><script src="https://accounts.google.com/gsi/client" async defer></script><script src="https://apis.google.com/js/api.js" async defer></script><script src="./config.js"></script><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7fa;color:#18324d;font:15px/1.5 system-ui}header,main,footer{max-width:1100px;margin:auto;padding:18px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:27px}.hero,.panel,.card{background:white;border:1px solid #dfe6ee;border-radius:13px;padding:18px;margin:14px 0}.hero{background:#153e65;color:white}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card{margin:0;cursor:pointer}.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}button{background:#174a7e;color:white;border:0;border-radius:7px;padding:10px 14px;cursor:pointer}button.alt{background:#e8eef5;color:#18324d}input,select{padding:10px;border:1px solid #ccd6e2;border-radius:7px;max-width:100%}.status{background:#eef3f8;border-radius:8px;padding:10px;white-space:pre-wrap;font-size:13px}.item{border-top:1px solid #e5eaf1;padding:10px 0;display:flex;justify-content:space-between;gap:10px;align-items:center}.item a{color:#174a7e;overflow-wrap:anywhere}.muted{color:#66758b;font-size:12px}.drop{border:2px dashed #aab9ca;border-radius:10px;padding:22px;text-align:center}.drop.drag{background:#eaf3fb}@media(max-width:700px){.grid{grid-template-columns:repeat(2,1fr)}.item{display:block}}
+</style></head><body><header><div><b>PHÚC NGUYÊN DIGITAL</b><div class="muted">Thư viện số · GitHub Pages + Google Drive API</div></div><div class="row"><button id="login" onclick="PND.login()">Đăng nhập Google</button><button id="logout" class="alt" hidden onclick="PND.logout()">Đăng xuất</button></div></header><main>
+<section class="hero"><h1>Không gian tri thức trong tầm tay</h1><p>Quản lý tài liệu trực tiếp trên Google Drive, không qua Apps Script Web App.</p><div class="row"><button onclick="PND.pick('source')">Chọn kho nguồn</button><button onclick="PND.pick('inbox')">Chọn thư mục tiếp nhận</button></div><div id="status" class="status">Đang chờ cấu hình OAuth Client ID và Google API Key.</div></section>
+<h2>Danh mục thư viện</h2><section class="grid" id="cats"></section>
+<section class="panel"><h2>Đồng bộ kho nguồn</h2><p class="muted">Đọc metadata thư mục nguồn và thư mục con. Không sửa, di chuyển hoặc xóa tài liệu gốc.</p><button onclick="PND.sync()">Đồng bộ ngay</button><div id="source"></div></section>
+<section class="panel"><h2>Tiếp nhận tài liệu kéo-thả</h2><div class="drop" id="drop">Kéo thả tệp vào đây hoặc chọn tệp<input type="file" id="files" multiple></div><div class="row"><select id="uploadCat"></select><button onclick="PND.upload()">Tải lên thư mục tiếp nhận</button></div><p class="muted">Giới hạn thử nghiệm 8 MB/tệp. Tệp chỉ được tải vào thư mục tiếp nhận đã chọn.</p><div id="uploadStatus" class="status"></div></section>
+<section class="panel"><h2>Tìm kiếm và quản lý tài liệu</h2><div class="row"><input id="query" placeholder="Tên tài liệu"><select id="filter"></select><button onclick="PND.render()">Tìm kiếm</button><button class="alt" onclick="PND.load()">Tải danh mục</button></div><div id="results"></div></section>
+<section class="panel"><h2>Tài liệu ghim</h2><div id="pinned"></div></section><section class="panel"><h2>Nhật ký hoạt động</h2><div id="log"></div></section></main><footer class="muted">© 2026 Phúc Nguyên Digital</footer>
 <script>
-document.getElementById('searchForm').addEventListener('submit',function(e){
- e.preventDefault();
- const q=document.getElementById('q').value.trim();
- if(q) alert('Kho dữ liệu chưa được kết nối. Từ khóa "'+q+'" sẽ được sử dụng khi hoàn tất đồng bộ Google Drive.');
-});
-document.querySelectorAll('[data-category]').forEach(function(card){
- card.addEventListener('click',function(){
-  const title=card.querySelector('h3').textContent;
-  document.getElementById('emptyState').innerHTML='Đang chọn danh mục: <strong>'+title+'</strong><br>Danh sách tài liệu sẽ xuất hiện sau khi kết nối và đồng bộ Google Drive.';
- });
-});
-</script>
-</body>
-</html>
+const PND=(()=>{const cfg=window.PND_CONFIG||{},cats=["Chương trình đào tạo","Đề cương","Tài liệu giảng dạy","Nghiên cứu khoa học","Văn bản quy chế","Y học - Sức khỏe","Thể thao vận động","Tài liệu khác","Chờ phân loại"];let token=null,sourceId=localStorage.getItem("pnd_source")||"1Jt2Kp1o44elRiDdHfQ2lEx9vEbruET_Y",inboxId=localStorage.getItem("pnd_inbox")||"",catalogId=null,files=[],activity=[],pickerReady=false;
+const $=id=>document.getElementById(id),status=s=>$("status").textContent=s,need=()=>{if(!token)throw Error("Hãy đăng nhập Google.");if(!cfg.CLIENT_ID||!cfg.API_KEY)throw Error("Thiếu CLIENT_ID/API_KEY trong config.js.");};
+function init(){cats.forEach(c=>{for(const id of ["cats","uploadCat","filter"]){const el=$(id);if(id==="filter"){const all=document.createElement("option");all.value="";all.textContent="Tất cả danh mục";el.append(all)}if(id==="cats"){const d=document.createElement("div");d.className="card";d.textContent=c;d.onclick=()=>{$("filter").value=c;render()};el.append(d)}else{const o=document.createElement("option");o.value=c;o.textContent=c;el.append(o)}}});}
+function login(){if(!cfg.CLIENT_ID){status("Cấu hình CLIENT_ID và API_KEY theo CONFIGURATION.md trước khi đăng nhập.");return}const client=google.accounts.oauth2.initTokenClient({client_id:cfg.CLIENT_ID,scope:"https://www.googleapis.com/auth/drive.file",callback:async r=>{if(r.error){status(r.error);return}token=r.access_token;$("login").hidden=true;$("logout").hidden=false;await new Promise((ok,bad)=>gapi.load("picker",{callback:()=>{pickerReady=true;ok()},onerror:bad}));status("Đã đăng nhập. Hãy chọn kho nguồn và thư mục tiếp nhận qua Google Picker.")}});client.requestAccessToken({prompt:"consent"})}
+function logout(){token=null;$("login").hidden=false;$("logout").hidden=true;status("Đã đăng xuất.")}
+function pick(which){try{need();if(!pickerReady)throw Error("Google Picker chưa sẵn sàng.");const view=new google.picker.DocsView(google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true);new google.picker.PickerBuilder().setTitle(which==="source"?"Chọn kho nguồn":"Chọn thư mục tiếp nhận riêng").setDeveloperKey(cfg.API_KEY).setOAuthToken(token).addView(view).setCallback(d=>{if(d.action!==google.picker.Action.PICKED)return;const f=d.docs[0];if(which==="source"){sourceId=f.id;localStorage.setItem("pnd_source",f.id)}else{inboxId=f.id;localStorage.setItem("pnd_inbox",f.id)}status((which==="source"?"Kho nguồn: ":"Nơi tiếp nhận: ")+f.name) }).build().setVisible(true)}catch(e){status(e.message)}}
+async function api(url,opt={}){need();const h=Object.assign({},opt.headers||{},{Authorization:"Bearer "+token});const r=await fetch(url,Object.assign({},opt,{headers:h}));const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error?.message||"Drive API "+r.status);return j}
+async function list(folder){let page=null,out=[];do{const q=encodeURIComponent("'"+folder+"' in parents and trashed=false");const u="https://www.googleapis.com/drive/v3/files?q="+q+"&pageSize=100&fields=nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,size)"+(page?"&pageToken="+page:"");const j=await api(u);out.push(...(j.files||[]));page=j.nextPageToken;if(out.length>=500)break}while(page);return out.slice(0,500)}
+async function sync(){try{need();if(!sourceId)throw Error("Chưa chọn kho nguồn.");status("Đang đồng bộ metadata...");const q=[sourceId],seen=new Set(),all=[];while(q.length&&all.length<500){const id=q.shift();if(seen.has(id))continue;seen.add(id);for(const f of await list(id)){if(f.mimeType==="application/vnd.google-apps.folder")q.push(f.id);else if(!/^(image|video)\//.test(f.mimeType))all.push({...f,source:"Kho nguồn"})}}files=all;await load();render();$("source").textContent="Đã đọc "+all.length+" tệp metadata (tối đa 500/lượt)."}catch(e){status("Lỗi đồng bộ: "+e.message)}}
+async function catalog(){if(!inboxId)return {items:[],activity:[]};const q=encodeURIComponent("'"+inboxId+"' in parents and name='pnd-catalog.json' and trashed=false");const j=await api("https://www.googleapis.com/drive/v3/files?q="+q+"&fields=files(id,name)");if(!j.files?.length){catalogId=null;return {items:[],activity:[]}}catalogId=j.files[0].id;return api("https://www.googleapis.com/drive/v3/files/"+catalogId+"?alt=media")}
+async function save(data){const form=new FormData(),meta={name:"pnd-catalog.json",mimeType:"application/json",parents:[inboxId]};form.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));form.append("file",new Blob([JSON.stringify(data)],{type:"application/json"}));const url="https://www.googleapis.com/upload/drive/v3/files"+(catalogId?"/"+catalogId:"")+"?uploadType=multipart&fields=id";const j=await api(url,{method:catalogId?"PATCH":"POST",body:form});catalogId=j.id}
+async function load(){try{const d=await catalog();activity=d.activity||[];const map=new Map((d.items||[]).map(x=>[x.id,x]));files=files.map(f=>({...f,...(map.get(f.id)||{})}));const known=new Set(files.map(f=>f.id));(d.items||[]).forEach(x=>{if(!known.has(x.id))files.push({...x,webViewLink:"https://drive.google.com/open?id="+x.id})});render();renderPinned();renderLog()}catch(e){status("Lỗi tải danh mục: "+e.message)}}
+async function persist(){const d=await catalog(),m=new Map((d.items||[]).map(x=>[x.id,x]));files.forEach(f=>m.set(f.id,{id:f.id,name:f.name,category:f.category||"Chờ phân loại",pinned:!!f.pinned,source:f.source||"Drive"}));await save({items:[...m.values()],activity:activity.slice(0,300)})}
+async function upload(){try{need();if(!inboxId)throw Error("Hãy chọn thư mục tiếp nhận riêng.");const fs=[...$("files").files];if(!fs.length)throw Error("Chưa chọn tệp.");let n=0;for(const f of fs){if(f.size>8*1024*1024)throw Error(f.name+" vượt 8 MB");const form=new FormData(),meta={name:f.name,mimeType:f.type||"application/octet-stream",parents:[inboxId]};form.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));form.append("file",f);const r=await api("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,modifiedTime,size",{method:"POST",body:form});files.unshift({...r,category:$("uploadCat").value,source:"Tải lên PND",pinned:false});activity.unshift({at:new Date().toISOString(),action:"UPLOAD",name:f.name});n++;$("uploadStatus").textContent="Đã tải lên "+n+"/"+fs.length}await persist();render();$("uploadStatus").textContent="Hoàn tất "+n+" tệp."; }catch(e){$("uploadStatus").textContent="Lỗi: "+e.message}}
+async function change(id,patch){const f=files.find(x=>x.id===id);Object.assign(f,patch);activity.unshift({at:new Date().toISOString(),action:"UPDATE",name:f.name});await persist();render();renderPinned();renderLog()}
+function render(){const q=$("query").value.toLowerCase(),c=$("filter").value,rows=files.filter(f=>(!q||f.name.toLowerCase().includes(q))&&(!c||f.category===c));$("results").innerHTML="";rows.slice(0,150).forEach(f=>{const d=document.createElement("div");d.className="item";const a=document.createElement("a");a.href=f.webViewLink||"https://drive.google.com/open?id="+f.id;a.target="_blank";a.textContent=f.name;const s=document.createElement("select");cats.forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c;o.selected=c===(f.category||"Chờ phân loại");s.append(o)});s.onchange=()=>change(f.id,{category:s.value});const b=document.createElement("button");b.textContent=f.pinned?"Bỏ ghim":"Ghim";b.onclick=()=>change(f.id,{pinned:!f.pinned});const right=document.createElement("span");right.append(s,b);d.append(a,right);$("results").append(d)});if(!rows.length)$("results").textContent="Không có kết quả hoặc chưa đồng bộ."}
+function renderPinned(){$("pinned").innerHTML="";files.filter(f=>f.pinned).forEach(f=>{const a=document.createElement("a");a.href=f.webViewLink||"https://drive.google.com/open?id="+f.id;a.textContent=f.name;a.target="_blank";a.style.display="block";$("pinned").append(a)})}
+function renderLog(){$("log").innerHTML="";activity.slice(0,30).forEach(x=>{const p=document.createElement("p");p.className="muted";p.textContent=x.at+" · "+x.action+" · "+x.name;$("log").append(p)})}
+function bind(){const d=$("drop");d.ondragover=e=>{e.preventDefault();d.classList.add("drag")};d.ondragleave=()=>d.classList.remove("drag");d.ondrop=e=>{e.preventDefault();d.classList.remove("drag");$("files").files=e.dataTransfer.files}}
+return {init,login,logout,pick,sync,upload,load,render,bind}})();document.addEventListener("DOMContentLoaded",()=>{PND.init();PND.bind()});
+</script></body></html>
