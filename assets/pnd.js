@@ -511,7 +511,11 @@ async function loadLive() {
     const allow = isAdmin ? null : (k => canCat(k));
     // Tìm tệp mới: đọc bằng quyền đăng nhập nếu quản trị đang có phiên Drive, nếu không đọc qua link chia sẻ
     let res;
-    try { res = await buildFromDrive(publicList, isAdmin, null, allow); }
+    try {
+      res = await buildFromDrive(publicList, isAdmin, null, allow);
+      // Thư mục chưa chia sẻ công khai: Drive trả danh sách rỗng thay vì báo lỗi
+      if (Object.values(res.newTree).every(n => n.missing)) { const e = new Error("private"); e.status = 403; throw e; }
+    }
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
     const meta = items; // dữ liệu ghi chú đã tải từ Firestore
