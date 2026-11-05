@@ -9,6 +9,8 @@ window.PND_CONFIG = {
     messagingSenderId: "842652271567",
     appId: "1:842652271567:web:e1e23a9d3a0f21d07988ba"
   },
+  // OAuth client web của dự án — dùng để gia hạn quyền Drive ngầm, không phải đăng nhập lại
+  CLIENT_ID: "842652271567-7d5orqj763rlrsiu2kq4ne0170fp9dsr.apps.googleusercontent.com",
   // Tài khoản Google quản trị (đăng nhập Google để quét Drive, tải lên, cấp mã)
   ADMIN_EMAILS: ["luuhuong.dhnv@gmail.com", "luuhuong.nnpl@gmail.com"],
   // Khóa reCAPTCHA (Fraud Defense) công khai cho App Check — bảo vệ Hỏi AI khỏi bị lạm dụng

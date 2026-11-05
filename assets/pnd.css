@@ -154,3 +154,18 @@ body.is-admin .admin-only{display:block}
   .brand img{width:56px;height:56px}
   .cards{grid-template-columns:repeat(2,1fr)}
 }
+
+/* Công cụ thư mục (quản trị) */
+.card-wrap{position:relative;display:flex;justify-content:center}
+.ftools{display:inline-flex;gap:4px;margin-left:8px}
+.card-wrap .ftools{position:absolute;top:4px;right:calc(50% - 72px);margin:0;opacity:0;transition:opacity .15s}
+.card-wrap:hover .ftools,.card-wrap:focus-within .ftools{opacity:1}
+.ftools button{border:0;background:#fffe;border-radius:6px;width:26px;height:26px;font-size:13px;box-shadow:0 1px 3px #0003;color:var(--ink)}
+.grp-head{display:flex;align-items:center;gap:6px}
+.grp-head .ftools button{background:var(--soft);box-shadow:none}
+.add-folder{align-self:start;width:100%;max-width:150px;aspect-ratio:4/3;border:2px dashed #9fb3cc;border-radius:6px;background:var(--soft);color:var(--ink);font-weight:700;font-size:13.5px;justify-self:center}
+.add-folder:hover{background:#e6eff9}
+div:not(.cards)>.add-folder{aspect-ratio:auto;max-width:none;width:auto;padding:8px 16px;border-radius:999px}
+.page-tools{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin:-6px 0 14px}
+.page-tools button{border:1px solid var(--line);border-radius:999px;padding:5px 14px;background:#fff;color:var(--ink);font-size:12.5px;font-weight:600}
+@media (hover:none){.card-wrap .ftools{opacity:1}}

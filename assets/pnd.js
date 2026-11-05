@@ -83,8 +83,8 @@ function toast(msg, kind) { const t = $("#toast"); t.textContent = msg; t.classN
 
 function loadSession() { try { const s = JSON.parse(localStorage.getItem("pnd_ma") || "null"); if (s && s.code && s.han && s.han >= todayISO()) return s; } catch (e) {} return null; }
 function saveSession(s) { try { s ? localStorage.setItem("pnd_ma", JSON.stringify(s)) : localStorage.removeItem("pnd_ma"); } catch (e) {} session = s; }
-function loadTok() { try { const t = JSON.parse(sessionStorage.getItem("pnd_drive") || "null"); if (t && t.exp > Date.now() + 60000) return t.t; } catch (e) {} return null; }
-function saveTok(t) { driveTok = t; try { t ? sessionStorage.setItem("pnd_drive", JSON.stringify({ t, exp: Date.now() + 55 * 60000 })) : sessionStorage.removeItem("pnd_drive"); } catch (e) {} }
+function loadTok() { try { const t = JSON.parse(localStorage.getItem("pnd_drive") || "null"); if (t && t.exp > Date.now() + 60000) return t.t; } catch (e) {} return null; }
+function saveTok(t, sec) { driveTok = t; try { t ? localStorage.setItem("pnd_drive", JSON.stringify({ t, exp: Date.now() + Math.max(300, (sec || 3600) - 300) * 1000 })) : localStorage.removeItem("pnd_drive"); } catch (e) {} }
 function isAdminUser(u) { return !!u && !u.isAnonymous && !!u.email && ADMINS.includes(u.email.toLowerCase()); }
 
 /* ---------- Quyền xem ---------- */
@@ -165,7 +165,7 @@ function renderAuth() {
   $("#whoami").textContent = isAdmin ? "Quản trị: " + user.email : session ? "Mã: " + session.code + " (đến " + fmtDate(session.han) + ")" : "";
   $("#btnLogout").hidden = !isAdmin && !session;
   $("#btnLogin").hidden = isAdmin;
-  if (!$("#btnScan").disabled) $("#adminNote").textContent = isAdmin ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive chưa kết nối (phiên 1 giờ): bấm Quét để đăng nhập lại.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
+  if (!$("#btnScan").disabled) $("#adminNote").textContent = isAdmin ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive sẽ tự kết nối lại khi bấm Quét hoặc Tải lên.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
   $("#btnInit").hidden = !!settings;
 }
 function currentCatKey() {
@@ -221,11 +221,16 @@ function requireAccess(key) {
   if (authReady) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[key] ? CAT[key].name : key) + "”.");
   return false;
 }
+function folderTools(id) {
+  return isAdmin && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
+}
 function cardHTML(n, cat) {
   const cnt = loaded.items && canCat(cat.key) ? countFiles(n.id) : null;
   const y = yearOf(n.name);
-  return `<button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>`;
+  const real = tree[n.id] && tree[n.id].name === n.name;
+  return `<div class="card-wrap"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
+const addBtn = (parent, label) => isAdmin ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
 function renderCat(key) {
   const cat = CAT[key]; if (!cat || (cat.adminOnly && !isAdmin)) { go(""); return; }
   if (!requireAccess(key)) return;
@@ -249,16 +254,16 @@ function renderFolder(id, isCatRoot) {
       const gk = sortFolders(childrenOf(g.id));
       const own = filesOf(g.id).length;
       const cards = gk.map(n => cardHTML(n, cat)).join("") + (own ? cardHTML({ id: g.id, name: "Tài liệu chung" }, cat) : "");
-      return `<div class="grp-title">${esc(g.name)}</div>${cards ? `<div class="cards">${cards}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
-    }).join("");
-  } else if (kids.length) {
-    body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}</div>`;
+      return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || isAdmin ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
+    }).join("") + (isAdmin ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
+  } else if (kids.length || isAdmin) {
+    body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}${addBtn(id, "Thư mục mới")}</div>`;
   }
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
   const crumbs = path.length > 1 ? `<div class="crumbs">${path.map((p, i) => i === path.length - 1 ? esc(p.name) : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`).join(" › ")}</div>` : "";
-  const tools = isAdmin && node.depth >= 2 ? `<div style="text-align:center;margin:-6px 0 12px"><button type="button" class="adm" style="border:1px solid var(--line);border-radius:999px;padding:5px 14px;background:#fff;color:var(--ink)" data-movefolder="${esc(id)}">Chuyển cả thư mục này sang danh mục khác…</button></div>` : "";
+  const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${navRow()}</section>`;
 }
 function noteHTML(f) {
@@ -331,23 +336,38 @@ async function adminLogin() {
   const prov = new GoogleAuthProvider();
   prov.addScope(DRIVE_SCOPE);
   prov.setCustomParameters({ prompt: "select_account", login_hint: ADMINS[0] || "" });
+  if (auth.currentUser && isAdminUser(auth.currentUser)) prov.setCustomParameters({ login_hint: auth.currentUser.email });
   const r = await signInWithPopup(auth, prov);
   const cred = GoogleAuthProvider.credentialFromResult(r);
   if (!isAdminUser(r.user)) { await signOut(auth); throw new Error("Tài khoản " + r.user.email + " không có quyền quản trị."); }
   saveTok(cred && cred.accessToken || null);
 }
-async function ensureDrive() {
-  if (driveTok) return driveTok;
+function gisToken(prompt) {
+  return new Promise((res, rej) => {
+    if (!(window.google && google.accounts && google.accounts.oauth2) || !CFG.CLIENT_ID) return rej(new Error("gis"));
+    const hint = (user && user.email) || ADMINS[0] || "";
+    const c = google.accounts.oauth2.initTokenClient({
+      client_id: CFG.CLIENT_ID, scope: DRIVE_SCOPE, prompt, hint, login_hint: hint,
+      callback: r => r && r.access_token ? res(r) : rej(new Error((r && r.error) || "token")),
+      error_callback: e => rej(new Error((e && e.type) || "popup"))
+    });
+    c.requestAccessToken({ prompt, hint, login_hint: hint });
+  });
+}
+async function ensureDrive(force) {
+  if (driveTok && !force) return driveTok;
+  // Đã đăng nhập quản trị trên máy này: xin lại quyền Drive ngầm, không hỏi lại tài khoản
+  if (isAdmin) { try { const r = await gisToken(""); saveTok(r.access_token, r.expires_in); return driveTok; } catch (e) { console.warn("gia hạn Drive", e.message); } }
   await adminLogin();
   if (!driveTok) throw new Error("Google chưa cấp quyền Drive.");
   return driveTok;
 }
 
 /* ---------- Google Drive ---------- */
-async function drive(url, opt = {}) {
+async function drive(url, opt = {}, retried) {
   const tk = await ensureDrive();
   const r = await fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + tk } });
-  if (r.status === 401) { saveTok(null); throw new Error("Phiên Drive đã hết hạn, bấm lại để đăng nhập Google."); }
+  if (r.status === 401) { saveTok(null); if (!retried) return drive(url, opt, true); throw new Error("Chưa gia hạn được quyền Drive. Bấm lại để thử lần nữa."); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j.error && j.error.message) || "Drive " + r.status);
   return j;
@@ -510,6 +530,47 @@ async function addSource() {
     await scanDrive(true);
     go("dm/cho");
   } catch (x) { toast("Chưa thêm được nguồn: " + x.message, "err"); }
+}
+
+/* Tạo, đổi tên, xóa thư mục (trên Drive và chỉ mục) */
+function subtreeIds(id) { const out = [id]; for (const c of childrenOf(id)) out.push(...subtreeIds(c.id)); return out; }
+async function newFolder(parent) {
+  const p = tree[parent]; if (!p) return;
+  const name = await ask("Tạo thư mục mới bên trong “" + (p.depth <= 1 ? CAT[p.cat].name : p.name) + "”.", { title: "THƯ MỤC MỚI", input: "Tên thư mục", ok: "Tạo" });
+  if (!name) return;
+  try {
+    const f = await createFolder(name, parent);
+    const node = { id: f.id, name: f.name, parent, cat: p.cat, depth: p.depth + 1 };
+    await setDoc(doc(db, "pnd_tree", f.id), node); tree[f.id] = node;
+    await logAct("FOLDER_NEW", name); toast("Đã tạo thư mục “" + name + "”.", "ok"); route();
+  } catch (x) { toast("Chưa tạo được thư mục: " + x.message, "err"); }
+}
+async function renameFolder(id) {
+  const n = tree[id]; if (!n || n.depth < 2) return;
+  const name = await ask("Đổi tên thư mục (tên trên Google Drive cũng được đổi theo).", { title: "ĐỔI TÊN THƯ MỤC", input: "Tên mới", value: n.name, ok: "Lưu" });
+  if (!name || name === n.name) return;
+  try {
+    await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=id,name", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    await setDoc(doc(db, "pnd_tree", id), { name }, { merge: true }); n.name = name;
+    await logAct("FOLDER_RENAME", name); toast("Đã đổi tên thành “" + name + "”.", "ok"); route();
+  } catch (x) { toast("Chưa đổi được tên: " + x.message, "err"); }
+}
+async function deleteFolder(id) {
+  const n = tree[id]; if (!n || n.depth < 2) return;
+  const ids = subtreeIds(id), files = Object.values(items).filter(f => ids.includes(f.parent));
+  const msg = "Xóa thư mục “" + n.name + "”" + (ids.length > 1 ? " cùng " + (ids.length - 1) + " thư mục con" : "") + (files.length ? " và " + files.length + " tài liệu bên trong" : "") + "?\nThư mục được chuyển vào Thùng rác của Google Drive, khôi phục được trong 30 ngày.";
+  if (!await ask(msg, { title: "XÓA THƯ MỤC", ok: "Xóa" })) return;
+  try {
+    await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=id", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }) });
+    const ops = ids.map(i => ({ type: "del", ref: doc(db, "pnd_tree", i) })).concat(files.map(f => ({ type: "del", ref: doc(db, "pnd_items", f.id) })));
+    await commitOps(ops);
+    ids.forEach(i => delete tree[i]); files.forEach(f => delete items[f.id]);
+    if (files.some(f => f.star)) { thongDung = thongDung.filter(s => !files.find(f => f.id === s.id)); await setDoc(doc(db, "pnd_settings", "thongdung"), { items: thongDung }); }
+    await logAct("FOLDER_TRASH", n.name);
+    toast("Đã xóa thư mục “" + n.name + "” (nằm trong Thùng rác Drive 30 ngày).", "ok");
+    const h = decodeURIComponent(location.hash.slice(1));
+    if (h === "f/" + id || ids.includes(h.slice(2))) go("f/" + encodeURIComponent(n.parent)); else route();
+  } catch (x) { toast("Chưa xóa được: " + x.message, "err"); }
 }
 
 /* Chuyển tệp hoặc thư mục vào thư mục khác trên Drive (thao tác của quản trị viên, có xác nhận) */
@@ -731,7 +792,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-star],[data-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-fnew],[data-fren],[data-fdel],[data-star],[data-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -743,12 +804,15 @@ document.addEventListener("click", e => {
   else if (t.dataset.edit) openEdit(t.dataset.edit);
   else if (t.dataset.move) moveTo(t.dataset.move, false);
   else if (t.dataset.movefolder) moveTo(t.dataset.movefolder, true);
+  else if (t.dataset.fnew) newFolder(t.dataset.fnew);
+  else if (t.dataset.fren) renameFolder(t.dataset.fren);
+  else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close")) t.closest("dialog").close();
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
 $("#btnLogin").onclick = () => openLogin("Nhập mã tài khoản do giảng viên cấp để xem tài liệu.");
-$("#btnLogout").onclick = async () => { saveSession(null); saveTok(null); aiChat = null; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
+$("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguyên Digital trên máy này?")) return; saveSession(null); saveTok(null); aiChat = null; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
 $("#loginForm").onsubmit = async e => {
   e.preventDefault(); const btn = $("#loginGo"); btn.disabled = true; $("#loginErr").textContent = loginTab === "admin" ? "Đang mở cửa sổ đăng nhập Google…" : "Đang kiểm tra mã…";
   try {
