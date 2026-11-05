@@ -238,6 +238,7 @@ function cardHTML(n, cat) {
   const real = tree[n.id] && tree[n.id].name === n.name;
   return `<div class="card-wrap"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
+const upBtn = parent => isAdmin ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
 const addBtn = (parent, label) => isAdmin ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
 function renderCat(key) {
   const cat = CAT[key]; if (!cat || (cat.adminOnly && !isAdmin)) { go(""); return; }
@@ -265,14 +266,14 @@ function renderFolder(id, isCatRoot) {
       return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || isAdmin ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
     }).join("") + (isAdmin ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
   } else if (kids.length || isAdmin) {
-    body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}${addBtn(id, "Thư mục mới")}</div>`;
+    body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}${addBtn(id, "Thư mục mới")}${node.depth >= 2 ? upBtn(id) : ""}</div>`;
   }
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
   const crumbs = path.length > 1 ? `<div class="crumbs">${path.map((p, i) => i === path.length - 1 ? esc(p.name) : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`).join(" › ")}</div>` : "";
-  const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
-  $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${navRow()}</section>`;
+  const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
+  $("#main").innerHTML = `<section class="box${isAdmin ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${isAdmin ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
 }
 function noteHTML(f) {
   const l = [];
@@ -677,14 +678,18 @@ function folderOptions(key) {
   const walk = (id, lvl) => { const n = tree[id]; if (!n) return; out.push(`<option value="${esc(id)}">${"— ".repeat(lvl)}${esc(lvl ? n.name : CAT[key].name + " (thư mục gốc)")}</option>`); sortFolders(childrenOf(id)).forEach(c => walk(c.id, lvl + 1)); };
   walk(rootId, 0); return out.join("");
 }
-function openUpload() {
+function openUpload(folderId, files) {
   if (!isAdmin) { openLogin(); setLoginTab("admin"); $("#loginErr").textContent = "Tải tài liệu lên cần đăng nhập quản trị."; return; }
   if (!settings) { toast("Chưa có cây thư mục. Bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
   $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; upFilesSel = []; $("#dropText").textContent = "Kéo thả tệp vào đây hoặc bấm để chọn";
   $("#upCat").innerHTML = CATS.map(c => `<option value="${c.key}">${esc(c.name)}</option>`).join("");
   const cur = currentCatKey(); if (cur && CAT[cur]) $("#upCat").value = cur;
   $("#upFolder").innerHTML = folderOptions($("#upCat").value);
-  const h = decodeURIComponent(location.hash.slice(1)); if (h.startsWith("f/") && tree[h.slice(2)]) $("#upFolder").value = h.slice(2);
+  const h = decodeURIComponent(location.hash.slice(1));
+  const target = folderId && tree[folderId] ? folderId : (h.startsWith("f/") && tree[h.slice(2)] ? h.slice(2) : (cur ? catRootId(cur) : ""));
+  if (target && tree[target]) { $("#upCat").value = tree[target].cat; $("#upFolder").innerHTML = folderOptions(tree[target].cat); $("#upFolder").value = target; }
+  $("#upTitle").textContent = target && tree[target] && tree[target].depth >= 2 ? "TẢI LÊN: " + tree[target].name.toUpperCase() : "TẢI TÀI LIỆU LÊN";
+  if (files && files.length) { upFilesSel = [...files]; $("#dropText").textContent = upFilesSel.map(f => f.name).join(", "); }
   $("#newFolderWrap").hidden = false; setUpMode("file");
   $("#dlgUpload").showModal();
 }
@@ -852,7 +857,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-fnew],[data-fren],[data-fdel],[data-star],[data-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-star],[data-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -864,6 +869,7 @@ document.addEventListener("click", e => {
   else if (t.dataset.edit) openEdit(t.dataset.edit);
   else if (t.dataset.move) moveTo(t.dataset.move, false);
   else if (t.dataset.movefolder) moveTo(t.dataset.movefolder, true);
+  else if (t.dataset.upload) openUpload(t.dataset.upload);
   else if (t.dataset.fnew) newFolder(t.dataset.fnew);
   else if (t.dataset.fren) renameFolder(t.dataset.fren);
   else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
@@ -889,7 +895,11 @@ $("#loginForm").onsubmit = async e => {
   finally { btn.disabled = false; }
 };
 $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput").value.trim(); if (q) go("tim/" + encodeURIComponent(q)); };
-$("#btnUpload").onclick = openUpload;
+$("#btnUpload").onclick = () => openUpload();
+// Kéo thả tệp vào khung thư mục đang mở → mở hộp tải lên với đúng thư mục
+document.addEventListener("dragover", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
+document.addEventListener("dragleave", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("drag"); });
+document.addEventListener("drop", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
 $("#btnAI").onclick = openAI;
 $("#btnScan").onclick = () => scanDrive(false);
 $("#btnInit").onclick = initTree;
