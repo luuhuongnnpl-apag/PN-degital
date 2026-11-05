@@ -461,6 +461,7 @@ async function buildFromDrive(listFn, withCho, progress, allowCats) {
   const keyById = Object.fromEntries(Object.entries(settings.cats).map(([k, v]) => [v, k]));
   let level = [];
   const top = await listFn(settings.rootId);
+  if (!top.length) { const e = new Error("Thư mục gốc chưa chia sẻ hoặc đang trống"); e.status = 403; throw e; }
   for (const f of top) {
     const key = keyById[f.id];
     if (f.mimeType === FOLDER) {
@@ -514,8 +515,6 @@ async function loadLive() {
     let res;
     try {
       res = await buildFromDrive(publicList, isAdmin, null, allow);
-      // Thư mục chưa chia sẻ công khai: Drive trả danh sách rỗng thay vì báo lỗi
-      if (Object.values(res.newTree).every(n => n.missing)) { const e = new Error("private"); e.status = 403; throw e; }
     }
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
@@ -928,8 +927,8 @@ async function afterAuth() {
   }
   await loadItems();
   // Hiện ngay bản đã lưu trên máy, rồi đọc lại Drive
-  try { const c = JSON.parse(localStorage.getItem("pnd_live") || "null"); if (c && c.who === (isAdmin ? "admin" : session && session.code) && Date.now() - c.t < 6 * 3600e3) { Object.assign(tree, c.tree); for (const [id, it] of Object.entries(c.items)) items[id] = { ...it, ...(items[id] || {}) }; } } catch (e) {}
-  if (await loadLive()) { try { localStorage.setItem("pnd_live", JSON.stringify({ t: Date.now(), who: isAdmin ? "admin" : session && session.code, tree, items })); } catch (e) {} }
+  try { const c = JSON.parse(localStorage.getItem("pnd_live2") || "null"); if (c && c.who === (isAdmin ? "admin" : session && session.code) && Date.now() - c.t < 6 * 3600e3) { Object.assign(tree, c.tree); for (const [id, it] of Object.entries(c.items)) items[id] = { ...it, ...(items[id] || {}) }; } } catch (e) {}
+  if (await loadLive()) { try { localStorage.setItem("pnd_live2", JSON.stringify({ t: Date.now(), who: isAdmin ? "admin" : session && session.code, tree, items })); } catch (e) {} }
   authReady = true;
   if (isAdmin && liveState === "private") $("#adminNote").textContent = "Thư mục gốc PND chưa chia sẻ “Bất kỳ ai có đường liên kết”: người dùng mã chưa xem được tài liệu.";
   const dl = $("#dlgLogin"); if (dl.open && (isAdmin || session)) dl.close();
