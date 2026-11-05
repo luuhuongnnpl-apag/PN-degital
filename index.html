@@ -79,7 +79,10 @@
       <label class="fld"><span>Mã tài khoản</span><input id="codeInput" autocomplete="off" spellcheck="false" placeholder="Ví dụ: PND2026" style="text-transform:uppercase"></label>
     </div>
     <div data-pane="admin" hidden>
-      <p class="muted">Đăng nhập bằng tài khoản Google quản trị (luuhuong.dhnv@gmail.com). Google sẽ hỏi quyền truy cập Drive để quét và tải tài liệu; nếu hiện “ứng dụng chưa được xác minh”, bấm <b>Nâng cao → Tiếp tục</b>.</p>
+      <p class="muted">Tài khoản quản trị dùng chung cho cả hệ sinh thái Phúc Nguyên (PN Library, PN Work, PN Digital): đăng nhập một lần trên máy này là dùng được cả ba trang, cho tới khi bấm Thoát.</p>
+      <label class="fld"><span>Email</span><input id="admEmail" type="email" autocomplete="username" placeholder="luuhuong.nnpl@gmail.com"></label>
+      <label class="fld"><span>Mật khẩu</span><input id="admPass" type="password" autocomplete="current-password"></label>
+      <p class="muted">Hoặc để trống hai ô trên và bấm Đăng nhập để dùng <b>tài khoản Google</b> (luuhuong.dhnv@gmail.com).</p>
     </div>
     <p class="err" id="loginErr" role="alert"></p>
     <div class="dlg-act">
@@ -173,7 +176,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="./config.js?v=20261105b"></script>
-<script type="module" src="./assets/pnd.js?v=20261105b"></script>
+<script src="./config.js?v=20261105c"></script>
+<script type="module" src="./assets/pnd.js?v=20261105c"></script>
 </body>
 </html>

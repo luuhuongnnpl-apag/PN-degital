@@ -11,6 +11,10 @@ window.PND_CONFIG = {
   },
   // OAuth client web của dự án — dùng để gia hạn quyền Drive ngầm, không phải đăng nhập lại
   CLIENT_ID: "842652271567-7d5orqj763rlrsiu2kq4ne0170fp9dsr.apps.googleusercontent.com",
+  // Khóa công khai đọc thư mục Drive đã chia sẻ "Bất kỳ ai có đường liên kết" (chỉ dùng được trên luuhuongnnpl-apag.github.io)
+  DRIVE_KEY: "AIzaSyBxay5pqncjdoJ6EEfpAMRNfzj7MunHx3c",
+  // Tài khoản quản trị chung của hệ sinh thái PN (email/mật khẩu)
+  ADMIN_UID: "smoIpuX7qseqTeu9nToc9RYigku1",
   // Tài khoản Google quản trị (đăng nhập Google để quét Drive, tải lên, cấp mã)
   ADMIN_EMAILS: ["luuhuong.dhnv@gmail.com", "luuhuong.nnpl@gmail.com"],
   // Khóa reCAPTCHA (Fraud Defense) công khai cho App Check — bảo vệ Hỏi AI khỏi bị lạm dụng

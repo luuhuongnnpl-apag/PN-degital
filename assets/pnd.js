@@ -9,7 +9,7 @@
     (giống mã lớp của PNL); quy tắc bảo mật Firestore kiểm soát phía máy chủ.
 */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch, addDoc, Timestamp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
 const CFG = window.PND_CONFIG || {};
@@ -85,7 +85,7 @@ function loadSession() { try { const s = JSON.parse(localStorage.getItem("pnd_ma
 function saveSession(s) { try { s ? localStorage.setItem("pnd_ma", JSON.stringify(s)) : localStorage.removeItem("pnd_ma"); } catch (e) {} session = s; }
 function loadTok() { try { const t = JSON.parse(localStorage.getItem("pnd_drive") || "null"); if (t && t.exp > Date.now() + 60000) return t.t; } catch (e) {} return null; }
 function saveTok(t, sec) { driveTok = t; try { t ? localStorage.setItem("pnd_drive", JSON.stringify({ t, exp: Date.now() + Math.max(300, (sec || 3600) - 300) * 1000 })) : localStorage.removeItem("pnd_drive"); } catch (e) {} }
-function isAdminUser(u) { return !!u && !u.isAnonymous && !!u.email && ADMINS.includes(u.email.toLowerCase()); }
+function isAdminUser(u) { return !!u && !u.isAnonymous && (u.uid === CFG.ADMIN_UID || (!!u.email && u.emailVerified !== false && ADMINS.includes(u.email.toLowerCase()))); }
 
 /* ---------- Quyền xem ---------- */
 function canCat(key) {
@@ -136,7 +136,15 @@ async function loadItems() {
       const keys = session.cats.includes("*") ? PUBLIC_CATS.map(c => c.key) : session.cats.filter(k => CAT[k]);
       for (const k of keys) (await getDocs(query(collection(db, "pnd_items"), where("cat", "==", k)))).forEach(d => items[d.id] = d.data());
     }
-  } catch (e) { console.warn("items", e); if (e.code === "permission-denied" && session) { toast("Mã tài khoản không còn hiệu lực. Hãy đăng nhập lại.", "err"); saveSession(null); } }
+  } catch (e) {
+    console.warn("items", e);
+    // Phiên ẩn danh có thể vừa đổi (đăng nhập/thoát ở trang PN khác): ghi lại mã rồi thử một lần, không tự thoát
+    if (e.code === "permission-denied" && session && !loadItems.retried) {
+      loadItems.retried = true;
+      try { await useCode(session.code); return loadItems(); } catch (x) { if (x.invalidCode) { toast(x.message + " Hãy nhập mã mới.", "err"); saveSession(null); } }
+    }
+  }
+  loadItems.retried = false;
   loaded.items = true;
 }
 
@@ -313,9 +321,12 @@ function openLogin(hint) {
   $("#loginErr").textContent = ""; if (hint) $("#codeHint").textContent = hint;
   setLoginTab("code"); const d = $("#dlgLogin"); if (!d.open) d.showModal(); setTimeout(() => $("#codeInput").focus(), 50);
 }
-function setLoginTab(t) { loginTab = t; document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập Google" : "Xác nhận"; }
+function setLoginTab(t) { loginTab = t; document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
 async function ensureUser() { if (auth.currentUser) return auth.currentUser; const r = await signInAnonymously(auth); return r.user; }
 async function useCode(raw) {
+  try { return await useCode0(raw); } catch (e) { if (/^Mã /.test(e.message)) e.invalidCode = true; throw e; }
+}
+async function useCode0(raw) {
   const code = norm(raw);
   if (!okCode(code)) throw new Error("Mã gồm 3–24 ký tự: chữ không dấu, chữ số, gạch ngang hoặc gạch dưới.");
   const u = await ensureUser();
@@ -442,38 +453,83 @@ async function initTree() {
   finally { setBusy("#btnInit", false, "Khởi tạo cây thư mục"); renderAuth(); }
 }
 
+/* Dựng cây thư mục + danh sách tệp từ Drive. listFn: đọc bằng quyền đăng nhập hoặc bằng khóa công khai.
+   withCho: gồm cả Chờ phân loại và các nguồn bổ sung (chỉ quản trị). */
+async function buildFromDrive(listFn, withCho, progress, allowCats) {
+  const newTree = {}, newItems = {};
+  const keyById = Object.fromEntries(Object.entries(settings.cats).map(([k, v]) => [v, k]));
+  let level = [];
+  const top = await listFn(settings.rootId);
+  for (const f of top) {
+    const key = keyById[f.id];
+    if (f.mimeType === FOLDER) {
+      if (key) { if (allowCats && !allowCats(key)) continue; newTree[f.id] = { id: f.id, name: CAT[key] ? CAT[key].name : f.name, parent: settings.rootId, cat: key, depth: 1 }; }
+      else if (withCho) newTree[f.id] = { id: f.id, name: f.name, parent: settings.cats.cho, cat: "cho", depth: 2 };
+      else continue;
+      if (key !== "cho" || withCho) level.push(f.id);
+    } else if (withCho) newItems[f.id] = fileItem(f, "cho", settings.cats.cho);
+  }
+  if (withCho) for (const src of (settings.sources || [])) if (!newTree[src.id]) { newTree[src.id] = { id: src.id, name: "Nguồn: " + src.name, parent: settings.cats.cho, cat: "cho", depth: 2, source: true }; level.push(src.id); }
+  for (const [k, id] of Object.entries(settings.cats)) if (!newTree[id] && (withCho || k !== "cho") && (!allowCats || allowCats(k))) newTree[id] = { id, name: CAT[k] ? CAT[k].name : k, parent: settings.rootId, cat: k, depth: 1, missing: true };
+  let n = 0;
+  while (level.length && n < 8000) {
+    if (progress) progress("Đang đọc Drive: " + Object.keys(newTree).length + " thư mục, " + n + " tệp");
+    const next = [];
+    for (let i = 0; i < level.length; i += 6) {
+      const part = level.slice(i, i + 6);
+      const lists = await Promise.all(part.map(id => listFn(id).catch(() => [])));
+      part.forEach((id, j) => {
+        const parent = newTree[id];
+        for (const f of lists[j]) {
+          if (f.mimeType === FOLDER) { if (!newTree[f.id]) { newTree[f.id] = { id: f.id, name: f.name, parent: id, cat: parent.cat, depth: parent.depth + 1 }; next.push(f.id); } }
+          else { newItems[f.id] = fileItem(f, parent.cat, id); n++; }
+        }
+      });
+    }
+    level = next;
+  }
+  return { newTree, newItems, n };
+}
+
+/* Đọc trực tiếp thư mục Drive đã chia sẻ "Bất kỳ ai có đường liên kết" bằng khóa công khai — không cần đăng nhập Drive */
+let liveState = "";   // "", "ok", "private"
+async function publicList(id) {
+  let out = [], page = "";
+  do {
+    const q = encodeURIComponent("'" + id + "' in parents and trashed=false");
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=nextPageToken,files(${FIELDS})&key=${CFG.DRIVE_KEY}${page ? "&pageToken=" + page : ""}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error((j.error && j.error.message) || "Drive " + r.status); e.status = r.status; throw e; }
+    out = out.concat(j.files || []); page = j.nextPageToken || "";
+  } while (page);
+  return out;
+}
+const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added"];
+async function loadLive() {
+  if (!settings || !CFG.DRIVE_KEY || (!isAdmin && !session)) return false;
+  try {
+    const allow = isAdmin ? null : (k => canCat(k));
+    // Tìm tệp mới: đọc bằng quyền đăng nhập nếu quản trị đang có phiên Drive, nếu không đọc qua link chia sẻ
+    let res;
+    try { res = await buildFromDrive(publicList, isAdmin, null, allow); }
+    catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
+    const { newTree, newItems } = res;
+    const meta = items; // dữ liệu ghi chú đã tải từ Firestore
+    for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of META) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
+    for (const [id, m] of Object.entries(meta)) if (m.mime === "link" && newTree[m.parent]) newItems[id] = m; // tài liệu dạng link
+    if (isAdmin) for (const [id, n] of Object.entries(tree)) if (n.cat === "cho" && !newTree[id]) newTree[id] = n; // giữ Chờ phân loại khi đọc công khai
+    if (isAdmin) for (const [id, m] of Object.entries(meta)) if (m.cat === "cho" && !newItems[id]) newItems[id] = m;
+    tree = newTree; items = newItems; liveState = "ok";
+    return true;
+  } catch (e) { console.warn("Đọc Drive trực tiếp", e.message); liveState = e.status === 403 || e.status === 404 ? "private" : ""; return false; }
+}
+
 /* Quét toàn bộ cây thư mục, cập nhật chỉ mục (không sửa, không xóa tệp trên Drive) */
 async function scanDrive(silent) {
   if (!settings) { toast("Chưa có cây thư mục. Bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
   setBusy("#btnScan", true, "Đang quét…");
   try {
-    const newTree = {}, newItems = {};
-    const keyById = Object.fromEntries(Object.entries(settings.cats).map(([k, v]) => [v, k]));
-    const top = await listChildren(settings.rootId);
-    const queue = [];
-    for (const f of top) {
-      if (f.mimeType === FOLDER) {
-        const key = keyById[f.id] || "cho";
-        newTree[f.id] = { id: f.id, name: keyById[f.id] ? CAT[key].name : f.name, parent: keyById[f.id] ? settings.rootId : settings.cats.cho, cat: key, depth: keyById[f.id] ? 1 : 2 };
-        queue.push(f.id);
-      } else newItems[f.id] = fileItem(f, "cho", settings.cats.cho);
-    }
-    for (const src of (settings.sources || [])) {
-      if (newTree[src.id]) continue;
-      newTree[src.id] = { id: src.id, name: "Nguồn: " + src.name, parent: settings.cats.cho, cat: "cho", depth: 2, source: true };
-      queue.push(src.id);
-    }
-    for (const [k, id] of Object.entries(settings.cats)) if (!newTree[id]) newTree[id] = { id, name: CAT[k] ? CAT[k].name : k, parent: settings.rootId, cat: k, depth: 1, missing: true };
-    let n = 0;
-    while (queue.length) {
-      const id = queue.shift(), parent = newTree[id];
-      $("#adminNote").textContent = "Đang quét: " + parent.name + " (" + n + " tệp)";
-      for (const f of await listChildren(id)) {
-        if (f.mimeType === FOLDER) { newTree[f.id] = { id: f.id, name: f.name, parent: id, cat: parent.cat, depth: parent.depth + 1 }; queue.push(f.id); }
-        else { newItems[f.id] = fileItem(f, parent.cat, id); n++; }
-      }
-      if (n > 8000) break;
-    }
+    const { newTree, newItems, n } = await buildFromDrive(listChildren, true, t => $("#adminNote").textContent = t);
     // Đồng bộ chỉ mục Firestore
     const oldTree = {}, oldItems = {};
     (await getDocs(collection(db, "pnd_tree"))).forEach(d => oldTree[d.id] = d.data());
@@ -679,7 +735,7 @@ function openEdit(id) {
 }
 async function submitEdit(e) {
   e.preventDefault(); const f = items[editing]; if (!f) return;
-  const patch = { ...metaFrom("#ed"), name: $("#edName").value.trim() || f.name };
+  const patch = { id: f.id, cat: f.cat, parent: f.parent, link: f.link || "", mime: f.mime || "", ...metaFrom("#ed"), name: $("#edName").value.trim() || f.name };
   try { await setDoc(doc(db, "pnd_items", f.id), patch, { merge: true }); Object.assign(f, patch); await syncStar(f); $("#dlgEdit").close(); toast("Đã lưu thông tin.", "ok"); route(); }
   catch (x) { $("#edErr").textContent = x.message; }
 }
@@ -816,12 +872,16 @@ $("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguy
 $("#loginForm").onsubmit = async e => {
   e.preventDefault(); const btn = $("#loginGo"); btn.disabled = true; $("#loginErr").textContent = loginTab === "admin" ? "Đang mở cửa sổ đăng nhập Google…" : "Đang kiểm tra mã…";
   try {
-    if (loginTab === "admin") { await adminLogin(); if (settings) setTimeout(() => scanDrive(true), 800); }
-    else { await useCode($("#codeInput").value); await loadItems(); }
+    if (loginTab === "admin") {
+      const em = $("#admEmail").value.trim(), pw = $("#admPass").value;
+      if (em && pw) { const r = await signInWithEmailAndPassword(auth, em, pw); if (!isAdminUser(r.user)) { await signOut(auth); throw new Error("Tài khoản này không phải quản trị."); } }
+      else await adminLogin();
+    }
+    else { await useCode($("#codeInput").value); await loadItems(); await loadLive(); }
     $("#dlgLogin").close(); $("#loginErr").textContent = "";
     toast(loginTab === "admin" ? "Đã đăng nhập quản trị." : "Đã xác nhận mã tài khoản.", "ok");
     route();
-  } catch (x) { $("#loginErr").textContent = x.code === "auth/popup-blocked" ? "Trình duyệt chặn cửa sổ đăng nhập. Hãy cho phép cửa sổ bật lên rồi thử lại." : x.code === "auth/popup-closed-by-user" ? "Cửa sổ đăng nhập đã bị đóng." : (x.message || "Chưa đăng nhập được."); }
+  } catch (x) { $("#loginErr").textContent = /auth\/(invalid-credential|wrong-password|user-not-found|invalid-email)/.test(x.code || "") ? "Email hoặc mật khẩu chưa đúng." : x.code === "auth/popup-blocked" ? "Trình duyệt chặn cửa sổ đăng nhập. Hãy cho phép cửa sổ bật lên rồi thử lại." : x.code === "auth/popup-closed-by-user" ? "Cửa sổ đăng nhập đã bị đóng." : (x.message || "Chưa đăng nhập được."); }
   finally { btn.disabled = false; }
 };
 $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput").value.trim(); if (q) go("tim/" + encodeURIComponent(q)); };
@@ -849,11 +909,15 @@ async function afterAuth() {
   isAdmin = isAdminUser(user);
   if (!isAdmin && session && user) {
     // Bảo đảm tài khoản ẩn danh hiện tại đã ghi mã (khi trình duyệt xóa dữ liệu đăng nhập)
-    try { const u = await getDoc(doc(db, "pnd_users", user.uid)); if (!u.exists() || u.data().code !== session.code) await useCode(session.code); } catch (e) { saveSession(null); }
+    try { const u = await getDoc(doc(db, "pnd_users", user.uid)); if (!u.exists() || u.data().code !== session.code) await useCode(session.code); }
+    catch (e) { if (e.invalidCode) { saveSession(null); toast(e.message + " Hãy nhập mã mới.", "err"); } }
   }
   await loadItems();
+  // Hiện ngay bản đã lưu trên máy, rồi đọc lại Drive
+  try { const c = JSON.parse(localStorage.getItem("pnd_live") || "null"); if (c && c.who === (isAdmin ? "admin" : session && session.code) && Date.now() - c.t < 6 * 3600e3) { Object.assign(tree, c.tree); for (const [id, it] of Object.entries(c.items)) items[id] = { ...it, ...(items[id] || {}) }; } } catch (e) {}
+  if (await loadLive()) { try { localStorage.setItem("pnd_live", JSON.stringify({ t: Date.now(), who: isAdmin ? "admin" : session && session.code, tree, items })); } catch (e) {} }
   authReady = true;
-  if (isAdmin && settings && driveTok && (!settings.lastScan || Date.now() - settings.lastScan > 30 * 60000)) setTimeout(() => scanDrive(true), 300);
+  if (isAdmin && liveState === "private") $("#adminNote").textContent = "Thư mục gốc PND chưa chia sẻ “Bất kỳ ai có đường liên kết”: người dùng mã chưa xem được tài liệu.";
   const dl = $("#dlgLogin"); if (dl.open && (isAdmin || session)) dl.close();
   route();
 }
