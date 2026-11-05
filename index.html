@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@600;700;800&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261104a">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261105a">
 </head>
 <body>
 <header class="top">
@@ -42,7 +42,6 @@
     <h2 class="ptitle">QUẢN LÝ DỮ LIỆU</h2>
     <div class="tool">
       <button type="button" class="pill" id="btnUpload">Tải lên</button>
-      <div class="tool-cap">NHẬP DỮ LIỆU</div>
     </div>
     <div class="tool">
       <form id="searchForm" class="search-pill" role="search">
@@ -51,17 +50,15 @@
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
         </button>
       </form>
-      <div class="tool-cap">TÌM KIẾM</div>
     </div>
     <div class="tool">
-      <button type="button" class="pill small" id="btnAI">Hỏi trợ lý AI (Gemini)</button>
-      <div class="tool-cap">HỎI AI</div>
+      <button type="button" class="pill" id="btnAI">Hỏi AI</button>
     </div>
     <div class="tool admin-only" id="adminTools">
-      <div class="tool-cap">CÔNG CỤ QUẢN TRỊ</div>
       <button type="button" class="pill small" id="btnScan">Quét Google Drive</button>
       <button type="button" class="pill small" id="btnInit">Khởi tạo cây thư mục</button>
       <button type="button" class="pill small" id="btnShare">Mở chia sẻ xem tài liệu</button>
+      <button type="button" class="pill small" id="btnSource">Thêm nguồn Drive</button>
       <p class="muted" id="adminNote"></p>
     </div>
   </aside>
@@ -162,9 +159,20 @@
   </div>
 </dialog>
 
+<!-- Xác nhận (thay cho hộp thoại trình duyệt) -->
+<dialog id="dlgConfirm" class="dlg">
+  <form method="dialog" class="dlg-in">
+    <h3 id="cfTitle">XÁC NHẬN</h3>
+    <p id="cfMsg" style="margin:0;white-space:pre-line"></p>
+    <label class="fld" id="cfInputWrap" hidden><span id="cfInputLbl"></span><input id="cfInput" autocomplete="off" spellcheck="false"></label>
+    <select id="cfSelect" class="fld-sel" hidden></select>
+    <div class="dlg-act"><button type="button" class="btn" id="cfNo">Hủy</button><button type="button" class="btn primary" id="cfYes">Đồng ý</button></div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" hidden></div>
 
 <script src="./config.js?v=20261104b"></script>
-<script type="module" src="./assets/pnd.js?v=20261104a"></script>
+<script type="module" src="./assets/pnd.js?v=20261105a"></script>
 </body>
 </html>

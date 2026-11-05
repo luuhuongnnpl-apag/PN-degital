@@ -13,7 +13,7 @@ a{color:var(--ink)}
 .top{background:var(--navy);color:#fff}
 .top-in{max-width:1180px;margin:auto;padding:14px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
 .brand{display:flex;gap:18px;align-items:center;color:#fff;text-decoration:none;min-width:0}
-.brand img{width:108px;height:108px;border-radius:50%;flex:none;background:#fff1}
+.brand img{width:108px;height:108px;border-radius:50%;flex:none;background:#fff;padding:5px;border:3px solid #fff;box-shadow:0 0 0 2px #c9a24a,0 2px 8px #0004;object-fit:contain}
 .brand-text{display:flex;flex-direction:column;min-width:0}
 .brand-name{font:800 clamp(26px,4.4vw,48px)/1.1 var(--serif);letter-spacing:.01em}
 .brand-slogan{font:600 clamp(16px,2vw,22px)/1.3 var(--sans);margin-top:6px}
@@ -24,7 +24,8 @@ a{color:var(--ink)}
 .whoami{font-size:12px;opacity:.85;max-width:200px;text-align:right}
 
 /* Bố cục ba cột */
-.layout{max-width:1180px;margin:14px auto;padding:0 16px;display:grid;grid-template-columns:240px minmax(0,1fr) 230px;gap:18px;align-items:start}
+.layout{max-width:1180px;margin:14px auto;padding:0 16px;display:grid;grid-template-columns:240px minmax(0,1fr) 230px;gap:18px;align-items:stretch}
+.layout.no-tools{align-items:start}
 .layout.no-tools{grid-template-columns:240px minmax(0,1fr)}
 .layout.no-tools .tools{display:none}
 .panel{border:1.5px dotted var(--line);border-radius:14px;background:#fff;padding:14px 12px}
@@ -46,6 +47,9 @@ body.is-admin .admin-only{display:block}
 
 /* Nội dung */
 .main{min-width:0;display:flex;flex-direction:column;gap:18px}
+.main .box.grow{flex:1}
+.tools{display:flex;flex-direction:column;gap:14px}
+.tools .tool{margin:0}
 .box{border:1.5px dotted var(--line);border-radius:14px;background:#fff;padding:18px 20px;min-height:120px;position:relative}
 .box-title{font:800 clamp(20px,2.6vw,27px)/1.25 var(--serif);color:var(--ink);text-align:center;text-decoration:underline;text-underline-offset:5px;margin:0 0 16px}
 .box-title.sm{font-size:19px}
@@ -70,11 +74,13 @@ body.is-admin .admin-only{display:block}
 .star-item{display:flex;gap:10px;align-items:center;background:var(--soft);border-radius:10px;padding:9px 12px;border:0;text-align:left;color:var(--ink);font-weight:600}
 .star-item .st{color:#d29a00;font-size:18px}
 .star-item small{display:block;color:var(--muted);font-weight:500}
-.links{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:end}
+.links{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;align-items:start}
+.links-title{font:800 19px/1.2 var(--serif);color:var(--ink);text-align:center;text-decoration:underline;text-underline-offset:4px;margin:0 0 14px}
+.fld-sel{font:14px var(--sans);padding:9px 11px;border:1px solid #c8d4e3;border-radius:9px;width:100%}
 .link-col{text-align:center}
 .link-col h4{font:800 18px/1.2 var(--serif);color:var(--ink);text-decoration:underline;text-underline-offset:4px;margin:0 0 10px}
 .ltile{display:flex;flex-direction:column;align-items:center;gap:6px;text-decoration:none;color:var(--ink);font-weight:600;background:none;border:0;padding:0;width:100%}
-.ltile .lv{width:100%;max-width:150px;aspect-ratio:4/3;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px #0003;display:flex;align-items:center;justify-content:center}
+.ltile .lv{width:100%;max-width:140px;aspect-ratio:4/3;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px #0003;display:flex;align-items:center;justify-content:center}
 .ltile .lv svg{width:100%;height:100%}
 .ltile:hover .lv{box-shadow:0 4px 10px #0003}
 
@@ -135,16 +141,15 @@ body.is-admin .admin-only{display:block}
 @media (max-width:980px){
   .layout,.layout.no-tools{grid-template-columns:1fr}
   .side .pills{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-  .links{grid-template-columns:repeat(3,1fr)}
+  .links{grid-template-columns:repeat(3,minmax(0,1fr))}
   .brand img{width:72px;height:72px}
 }
 @media (max-width:560px){
   .grid2{grid-template-columns:1fr}
-  .links{grid-template-columns:repeat(2,1fr)}
+  .links{grid-template-columns:repeat(3,minmax(0,1fr))}
   .top-in{padding:10px 16px 14px;flex-direction:column;gap:6px}
   .top-auth{flex-direction:row;align-self:flex-end;order:-1;gap:14px}
   .whoami{display:none}
-  .link-col[style]{grid-column:1/-1!important}
   .brand{gap:10px}
   .brand img{width:56px;height:56px}
   .cards{grid-template-columns:repeat(2,1fr)}

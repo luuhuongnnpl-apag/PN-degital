@@ -62,6 +62,22 @@ const vi = new Intl.Collator("vi", { sensitivity: "base", numeric: true });
 const yearOf = s => { const m = String(s || "").match(/(19|20)\d{2}/g); return m ? +m[m.length - 1] : 0; };
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
+/* Hộp xác nhận / nhập liệu ngay trong trang (trình duyệt nhúng có thể chặn confirm/prompt) */
+function ask(msg, opt = {}) {
+  return new Promise(res => {
+    const d = $("#dlgConfirm");
+    $("#cfTitle").textContent = opt.title || "XÁC NHẬN";
+    $("#cfMsg").textContent = msg;
+    $("#cfInputWrap").hidden = !opt.input; $("#cfInput").value = opt.value || ""; $("#cfInputLbl").textContent = opt.input || "";
+    const sel = $("#cfSelect"); sel.hidden = !opt.options; if (opt.options) sel.innerHTML = opt.options;
+    $("#cfYes").textContent = opt.ok || "Đồng ý";
+    const done = v => { d.close(); $("#cfYes").onclick = $("#cfNo").onclick = null; res(v); };
+    $("#cfYes").onclick = () => done(opt.input ? $("#cfInput").value.trim() : opt.options ? sel.value : true);
+    $("#cfNo").onclick = () => done(opt.input || opt.options ? null : false);
+    d.onclose = () => { if ($("#cfYes").onclick) done(opt.input || opt.options ? null : false); };
+    d.showModal(); if (opt.input) setTimeout(() => $("#cfInput").focus(), 50);
+  });
+}
 let toastT;
 function toast(msg, kind) { const t = $("#toast"); t.textContent = msg; t.className = "toast" + (kind ? " " + kind : ""); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, kind === "err" ? 8000 : 4500); }
 
@@ -149,7 +165,7 @@ function renderAuth() {
   $("#whoami").textContent = isAdmin ? "Quản trị: " + user.email : session ? "Mã: " + session.code + " (đến " + fmtDate(session.han) + ")" : "";
   $("#btnLogout").hidden = !isAdmin && !session;
   $("#btnLogin").hidden = isAdmin;
-  $("#adminNote").textContent = isAdmin ? (settings ? (driveTok ? "Đã kết nối Drive." : "Bấm Quét để kết nối lại Drive.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
+  if (!$("#btnScan").disabled) $("#adminNote").textContent = isAdmin ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive chưa kết nối (phiên 1 giờ): bấm Quét để đăng nhập lại.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
   $("#btnInit").hidden = !!settings;
 }
 function currentCatKey() {
@@ -183,20 +199,15 @@ function renderHome() {
   const L = CFG.LINKS || {};
   const tile = (href, icon, colors, label, ext) => `<a class="ltile" href="${esc(href)}"${ext ? ' target="_blank" rel="noopener"' : ""}><span class="lv">${cover(icon, colors)}</span><span>${esc(label)}</span></a>`;
   $("#main").innerHTML = `
-    <section class="box"><h2 class="box-title sm">THÔNG DỤNG</h2>${starHTML}</section>
+    <section class="box grow"><h2 class="box-title sm">THÔNG DỤNG</h2>${starHTML}</section>
     <section class="box">
+      <h4 class="links-title">LIÊN KẾT</h4>
       <div class="links">
-        <div class="link-col" style="grid-column:span 4"><h4>LIÊN KẾT</h4>
-          <div class="links" style="grid-template-columns:repeat(4,1fr)">
-            ${tile(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library", true)}
-            ${tile(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work", true)}
-            ${tile(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive", true)}
-            ${tile(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail", true)}
-          </div>
-        </div>
-        <div class="link-col"><h4>DỮ LIỆU</h4>
-          <button type="button" class="ltile" data-go="tai-khoan"><span class="lv">${cover("key", ["#0f2945", "#2b5f8f"])}</span><span>Quản lý mã tài khoản</span></button>
-        </div>
+        ${tile(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library", true)}
+        ${tile(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work", true)}
+        ${tile(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive", true)}
+        ${tile(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail", true)}
+        <button type="button" class="ltile" data-go="tai-khoan"><span class="lv">${cover("key", ["#0f2945", "#2b5f8f"])}</span><span>Quản lý mã tài khoản</span></button>
       </div>
     </section>`;
 }
@@ -247,7 +258,8 @@ function renderFolder(id, isCatRoot) {
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
   const crumbs = path.length > 1 ? `<div class="crumbs">${path.map((p, i) => i === path.length - 1 ? esc(p.name) : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`).join(" › ")}</div>` : "";
-  $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(title)}</h2>${crumbs}${body}${navRow()}</section>`;
+  const tools = isAdmin && node.depth >= 2 ? `<div style="text-align:center;margin:-6px 0 12px"><button type="button" class="adm" style="border:1px solid var(--line);border-radius:999px;padding:5px 14px;background:#fff;color:var(--ink)" data-movefolder="${esc(id)}">Chuyển cả thư mục này sang danh mục khác…</button></div>` : "";
+  $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${navRow()}</section>`;
 }
 function noteHTML(f) {
   const l = [];
@@ -263,7 +275,7 @@ function tableHTML(files, withPath) {
     <td class="nm">${f.star ? "★ " : ""}${esc(f.name)}${f.hit ? '<br><span class="muted">(khớp nội dung)</span>' : ""}</td>
     <td class="note">${noteHTML(f)}</td>
     ${withPath ? `<td class="note"><a data-folder="${esc(f.parent)}" style="cursor:pointer">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></td>` : ""}
-    <td class="rd">${f.link ? `<a class="open" href="${esc(f.link)}" target="_blank" rel="noopener">${f.mime === "link" ? "Mở link" : "Mở Drive"}</a>` : "—"}${isAdmin ? `<button type="button" class="adm" data-edit="${esc(f.id)}">Sửa</button>${isAdmin && f.shared === false && f.mime !== "link" ? '<span class="muted">chưa chia sẻ</span>' : ""}` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+    <td class="rd">${f.link ? `<a class="open" href="${esc(f.link)}" target="_blank" rel="noopener">${f.mime === "link" ? "Mở link" : "Mở Drive"}</a>` : "—"}${isAdmin ? `<button type="button" class="adm" data-edit="${esc(f.id)}">Sửa</button><button type="button" class="adm" data-move="${esc(f.id)}">Chuyển</button>${isAdmin && f.shared === false && f.mime !== "link" ? '<span class="muted">chưa chia sẻ</span>' : ""}` : ""}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 /* ---------- Tìm kiếm ---------- */
@@ -382,7 +394,7 @@ async function logAct(action, detail) { try { await addDoc(collection(db, "pnd_a
 /* Khởi tạo cây thư mục mẫu trên Drive */
 async function initTree() {
   if (settings) { toast("Cây thư mục đã có sẵn."); return; }
-  if (!confirm("Tạo thư mục “" + ROOT_NAME + "” cùng các danh mục và nhóm mẫu trong Google Drive của tài khoản quản trị?")) return;
+  if (!await ask("Tạo thư mục “" + ROOT_NAME + "” cùng các danh mục và nhóm mẫu trong Google Drive của tài khoản quản trị?")) return;
   setBusy("#btnInit", true, "Đang tạo…");
   try {
     const q = encodeURIComponent("name='" + ROOT_NAME + "' and mimeType='" + FOLDER + "' and 'root' in parents and trashed=false");
@@ -426,6 +438,11 @@ async function scanDrive(silent) {
         queue.push(f.id);
       } else newItems[f.id] = fileItem(f, "cho", settings.cats.cho);
     }
+    for (const src of (settings.sources || [])) {
+      if (newTree[src.id]) continue;
+      newTree[src.id] = { id: src.id, name: "Nguồn: " + src.name, parent: settings.cats.cho, cat: "cho", depth: 2, source: true };
+      queue.push(src.id);
+    }
     for (const [k, id] of Object.entries(settings.cats)) if (!newTree[id]) newTree[id] = { id, name: CAT[k] ? CAT[k].name : k, parent: settings.rootId, cat: k, depth: 1, missing: true };
     let n = 0;
     while (queue.length) {
@@ -448,6 +465,7 @@ async function scanDrive(silent) {
     for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link") ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
     await commitOps(ops);
     await logAct("SCAN", n + " tệp, " + Object.keys(newTree).length + " thư mục");
+    settings.lastScan = Date.now(); await setDoc(doc(db, "pnd_settings", "root"), { lastScan: settings.lastScan }, { merge: true });
     await Promise.all([loadTree(), loadItems()]);
     const unshared = Object.values(items).filter(f => f.shared === false && f.mime !== "link" && f.cat !== "cho").length;
     $("#adminNote").textContent = "Đã quét " + n + " tệp, " + Object.keys(newTree).length + " thư mục." + (unshared ? " " + unshared + " tệp chưa mở chia sẻ xem." : "");
@@ -461,7 +479,7 @@ async function scanDrive(silent) {
 async function shareAll() {
   const list = Object.values(items).filter(f => f.shared === false && f.mime !== "link" && f.cat !== "cho");
   if (!list.length) { toast("Mọi tài liệu đã được mở chia sẻ xem."); return; }
-  if (!confirm("Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” cho " + list.length + " tệp trong kho PND? Người có mã tài khoản mới thấy được đường link trên web; tệp gốc không bị sửa.")) return;
+  if (!await ask("Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” cho " + list.length + " tệp trong kho PND?\nNgười có mã tài khoản mới thấy được đường link trên web; nội dung tệp không bị sửa.")) return;
   setBusy("#btnShare", true, "Đang chia sẻ…");
   let ok = 0;
   try {
@@ -474,6 +492,53 @@ async function shareAll() {
     toast("Đã mở chia sẻ xem cho " + ok + " tệp.", ok === list.length ? "ok" : "err");
   } finally { setBusy("#btnShare", false, "Mở chia sẻ xem tài liệu"); route(); }
 }
+/* Thêm thư mục Drive có sẵn làm nguồn: tài liệu được đưa vào “Chờ phân loại” để xếp vào danh mục */
+async function addSource() {
+  if (!settings) { toast("Chưa có cây thư mục. Bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
+  const raw = await ask("Dán đường link hoặc mã thư mục Google Drive đang chứa tài liệu (ví dụ kho cũ). Tài liệu sẽ hiện trong mục CHỜ PHÂN LOẠI để sếp xếp vào danh mục; tệp gốc không bị sửa.", { title: "THÊM NGUỒN DRIVE", input: "Link hoặc mã thư mục", value: "https://drive.google.com/drive/folders/1Jt2Kp1o44elRiDdHfQ2lEx9vEbruET_Y", ok: "Thêm và quét" });
+  if (!raw) return;
+  const m = raw.match(/folders\/([\w-]{10,})/) || raw.match(/[?&]id=([\w-]{10,})/) || raw.match(/^([\w-]{10,})$/);
+  if (!m) { toast("Không nhận ra mã thư mục trong đường link.", "err"); return; }
+  try {
+    const f = await drive("https://www.googleapis.com/drive/v3/files/" + m[1] + "?fields=id,name,mimeType");
+    if (f.mimeType !== FOLDER) throw new Error("Đây không phải thư mục.");
+    if (f.id === settings.rootId || Object.values(settings.cats).includes(f.id)) throw new Error("Thư mục này đã nằm trong kho PND.");
+    const sources = (settings.sources || []).filter(x => x.id !== f.id).concat([{ id: f.id, name: f.name }]);
+    settings.sources = sources;
+    await setDoc(doc(db, "pnd_settings", "root"), { sources }, { merge: true });
+    toast("Đã thêm nguồn “" + f.name + "”. Đang quét…", "ok");
+    await scanDrive(true);
+    go("dm/cho");
+  } catch (x) { toast("Chưa thêm được nguồn: " + x.message, "err"); }
+}
+
+/* Chuyển tệp hoặc thư mục vào thư mục khác trên Drive (thao tác của quản trị viên, có xác nhận) */
+function allFolderOptions(exclude) {
+  const out = [];
+  for (const c of CATS) {
+    const rootId = catRootId(c.key); if (!rootId) continue;
+    const walk = (id, lvl) => { if (id === exclude) return; const n = tree[id]; if (!n) return; out.push(`<option value="${esc(id)}">${"— ".repeat(lvl)}${esc(lvl ? n.name : c.name.toUpperCase())}</option>`); sortFolders(childrenOf(id)).forEach(k => walk(k.id, lvl + 1)); };
+    walk(rootId, 0);
+  }
+  return out.join("");
+}
+async function moveTo(id, isFolder) {
+  const cur = isFolder ? tree[id] : items[id]; if (!cur) return;
+  const target = await ask("Chuyển “" + cur.name + "” sang thư mục:", { title: isFolder ? "CHUYỂN THƯ MỤC" : "CHUYỂN TÀI LIỆU", options: allFolderOptions(isFolder ? id : null), ok: "Chuyển" });
+  if (!target || target === cur.parent) return;
+  try {
+    if (!isFolder && cur.mime === "link") { await setDoc(doc(db, "pnd_items", id), { parent: target, cat: tree[target].cat }, { merge: true }); }
+    else {
+      const f = await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents");
+      await drive("https://www.googleapis.com/drive/v3/files/" + id + "?addParents=" + target + "&removeParents=" + (f.parents || []).join(",") + "&fields=id", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
+    }
+    await logAct("MOVE", cur.name + " → " + (tree[target] ? tree[target].name : target));
+    toast("Đã chuyển “" + cur.name + "”. Đang cập nhật…", "ok");
+    await scanDrive(true);
+    go("f/" + encodeURIComponent(target));
+  } catch (x) { toast("Chưa chuyển được: " + x.message, "err"); }
+}
+
 function setBusy(sel, on, label) { const b = $(sel); if (b) { b.disabled = on; b.textContent = label; } }
 
 /* ---------- Thông dụng ---------- */
@@ -666,7 +731,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-star],[data-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-star],[data-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -676,6 +741,8 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-login")) openLogin();
   else if (t.hasAttribute("data-adminlogin")) { openLogin(); setLoginTab("admin"); }
   else if (t.dataset.edit) openEdit(t.dataset.edit);
+  else if (t.dataset.move) moveTo(t.dataset.move, false);
+  else if (t.dataset.movefolder) moveTo(t.dataset.movefolder, true);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close")) t.closest("dialog").close();
 });
@@ -685,7 +752,7 @@ $("#btnLogout").onclick = async () => { saveSession(null); saveTok(null); aiChat
 $("#loginForm").onsubmit = async e => {
   e.preventDefault(); const btn = $("#loginGo"); btn.disabled = true; $("#loginErr").textContent = loginTab === "admin" ? "Đang mở cửa sổ đăng nhập Google…" : "Đang kiểm tra mã…";
   try {
-    if (loginTab === "admin") { await adminLogin(); }
+    if (loginTab === "admin") { await adminLogin(); if (settings) setTimeout(() => scanDrive(true), 800); }
     else { await useCode($("#codeInput").value); await loadItems(); }
     $("#dlgLogin").close(); $("#loginErr").textContent = "";
     toast(loginTab === "admin" ? "Đã đăng nhập quản trị." : "Đã xác nhận mã tài khoản.", "ok");
@@ -699,6 +766,7 @@ $("#btnAI").onclick = openAI;
 $("#btnScan").onclick = () => scanDrive(false);
 $("#btnInit").onclick = initTree;
 $("#btnShare").onclick = shareAll;
+$("#btnSource").onclick = addSource;
 $("#upCat").onchange = () => { $("#upFolder").innerHTML = folderOptions($("#upCat").value); };
 document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => setUpMode(b.dataset.up));
 $("#upFiles").onchange = () => { upFilesSel = [...$("#upFiles").files]; $("#dropText").textContent = upFilesSel.length ? upFilesSel.map(f => f.name).join(", ") : "Kéo thả tệp vào đây hoặc bấm để chọn"; };
@@ -721,6 +789,7 @@ async function afterAuth() {
   }
   await loadItems();
   authReady = true;
+  if (isAdmin && settings && driveTok && (!settings.lastScan || Date.now() - settings.lastScan > 30 * 60000)) setTimeout(() => scanDrive(true), 300);
   const dl = $("#dlgLogin"); if (dl.open && (isAdmin || session)) dl.close();
   route();
 }
