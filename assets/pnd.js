@@ -292,7 +292,7 @@ function renderFolder(id, isCatRoot) {
 async function setFolderImage(id) {
   if (!isAdmin || !tree[id]) return;
   const current = tree[id].imageUrl || "";
-  const value = await ask("Nhập địa chỉ HTTPS của ảnh bìa thư mục. Để trống để bỏ ảnh.", { title: "ẢNH BÌA THƯ MỤC", input: "Đường dẫn ảnh", value, ok: "Lưu ảnh" });
+  const value = await ask("Nhập địa chỉ HTTPS của ảnh bìa thư mục. Để trống để bỏ ảnh.", { title: "ẢNH BÌA THƯ MỤC", input: "Đường dẫn ảnh", value: current, ok: "Lưu ảnh" });
   if (value === null) return;
   const url = value.trim();
   if (url && !/^https:\/\//i.test(url)) { toast("Đường dẫn ảnh phải bắt đầu bằng https://", "err"); return; }
