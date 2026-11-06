@@ -289,16 +289,45 @@ function renderFolder(id, isCatRoot) {
   const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
   $("#main").innerHTML = `<section class="box${isAdmin ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${isAdmin ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
 }
-async function setFolderImage(id) {
+let imageTargetFolder = null;
+function setFolderImage(id) {
   if (!isAdmin || !tree[id]) return;
+  imageTargetFolder = id;
+  const d = $("#dlgImage"), preview = $("#imagePreview");
   const current = tree[id].imageUrl || "";
-  const value = await ask("Nhập địa chỉ HTTPS của ảnh bìa thư mục. Để trống để bỏ ảnh.", { title: "ẢNH BÌA THƯ MỤC", input: "Đường dẫn ảnh", value: current, ok: "Lưu ảnh" });
-  if (value === null) return;
-  const url = value.trim();
-  if (url && !/^https:\/\//i.test(url)) { toast("Đường dẫn ảnh phải bắt đầu bằng https://", "err"); return; }
-  try { await setDoc(doc(db, "pnd_tree", id), { imageUrl: url || "" }, { merge: true }); tree[id].imageUrl = url; toast(url ? "Đã cập nhật ảnh bìa." : "Đã bỏ ảnh bìa.", "ok"); route(); }
-  catch (e) { toast("Chưa lưu được ảnh: " + e.message, "err"); }
+  preview.innerHTML = current ? `<img src="${esc(current)}" alt="Ảnh bìa hiện tại">` : "Chưa có ảnh bìa";
+  $("#imagePasteStatus").textContent = "Bấm vào vùng bên dưới rồi nhấn Ctrl+V để dán ảnh đã sao chép.";
+  d.showModal();
+  $("#imagePasteArea").focus();
 }
+async function savePastedFolderImage(file) {
+  const id = imageTargetFolder;
+  if (!isAdmin || !id || !tree[id]) return;
+  if (!file || !file.type.startsWith("image/")) { toast("Clipboard chưa có dữ liệu ảnh hợp lệ.", "err"); return; }
+  if (file.size > 12 * 1024 * 1024) { toast("Ảnh vượt quá 12 MB. Hãy giảm dung lượng trước khi dán.", "err"); return; }
+  const status = $("#imagePasteStatus"), btn = $("#imageSaveBtn");
+  btn.disabled = true; status.textContent = "Đang tải ảnh lên Google Drive…";
+  try {
+    const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    const named = new File([file], "Anh-bia-" + id.slice(0, 8) + "." + ext, { type: file.type });
+    const uploaded = await uploadFile(named, tree[id].parent || id);
+    await drive(`https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions?sendNotificationEmail=false`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "reader", type: "anyone" })
+    });
+    const url = "https://drive.google.com/thumbnail?id=" + encodeURIComponent(uploaded.id) + "&sz=w1200";
+    await setDoc(doc(db, "pnd_tree", id), { imageUrl: url, imageFileId: uploaded.id }, { merge: true });
+    tree[id].imageUrl = url; tree[id].imageFileId = uploaded.id;
+    status.textContent = "Đã lưu ảnh bìa. Có thể đóng cửa sổ.";
+    $("#imagePreview").innerHTML = `<img src="${esc(url)}" alt="Ảnh bìa mới">`;
+    toast("Đã cập nhật ảnh bìa thư mục.", "ok");
+    await logAct("FOLDER_IMAGE", tree[id].name);
+  } catch (e) {
+    status.textContent = "Không lưu được ảnh: " + (e.message || e);
+    toast("Không lưu được ảnh bìa: " + (e.message || e), "err");
+  } finally { btn.disabled = false; }
+}
+
 function noteHTML(f) {
   const l = [];
   if (f.issuer || f.issued || f.number) l.push("Được ban hành" + (f.issued ? " ngày " + fmtDate(f.issued) : "") + (f.issuer ? " bởi " + esc(f.issuer) : "") + (f.number ? " (số " + esc(f.number) + ")" : ""));
@@ -310,7 +339,7 @@ function noteHTML(f) {
 }
 function tableHTML(files, withPath) {
   return `<div class="doc-list"><div class="doc-list-head">DANH SÁCH TÀI LIỆU</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
-    <div class="doc-main"><a class="doc-name" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
+    <div class="doc-main"><a class="doc-name" title="${esc(f.name)}" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
     <div class="doc-actions">${isAdmin ? `<button type="button" class="doc-edit" data-edit="${esc(f.id)}" title="Sửa thông tin">Sửa</button><button type="button" class="doc-edit" data-move="${esc(f.id)}" title="Chuyển thư mục">Chuyển</button>` : ""}${f.shared === false && f.mime !== "link" && isAdmin ? '<span class="muted">chưa chia sẻ</span>' : ""}</div>
   </div>`).join("")}</div>`;
 }
@@ -345,7 +374,15 @@ function openLogin(hint) {
   $("#loginErr").textContent = ""; if (hint) $("#codeHint").textContent = hint;
   setLoginTab("code"); const d = $("#dlgLogin"); if (!d.open) d.showModal(); setTimeout(() => $("#codeInput").focus(), 50);
 }
-function setLoginTab(t) { loginTab = t; document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
+function setLoginTab(t) { loginTab = t; $("#imagePasteArea").addEventListener("paste", e => {
+  const image = [...(e.clipboardData?.items || [])].find(x => x.type.startsWith("image/"));
+  if (!image) { $("#imagePasteStatus").textContent = "Clipboard không chứa ảnh. Hãy sao chép ảnh rồi nhấn Ctrl+V."; return; }
+  e.preventDefault();
+  const file = image.getAsFile();
+  if (file) { $("#imagePreview").innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Ảnh vừa dán">`; $("#imagePasteStatus").textContent = "Đã nhận ảnh. Bấm “Lưu ảnh bìa” để tải lên."; $("#imageSaveBtn").onclick = () => savePastedFolderImage(file); }
+});
+$("#imagePasteArea").addEventListener("click", () => $("#imagePasteArea").focus());
+document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
 async function ensureUser() { if (auth.currentUser) return auth.currentUser; const r = await signInAnonymously(auth); return r.user; }
 async function useCode(raw) {
   try { return await useCode0(raw); } catch (e) { if (/^Mã /.test(e.message)) e.invalidCode = true; throw e; }
@@ -880,7 +917,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-close],[data-image-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -898,7 +935,7 @@ document.addEventListener("click", e => {
   else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
   else if (t.dataset.fimg) setFolderImage(t.dataset.fimg);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
-  else if (t.hasAttribute("data-close")) t.closest("dialog").close();
+  else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
 $("#btnLogin").onclick = () => openLogin("Nhập mã tài khoản do giảng viên cấp để xem tài liệu.");
