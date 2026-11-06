@@ -211,3 +211,28 @@ div:not(.cards)>.add-folder{aspect-ratio:auto;max-width:none;width:auto;padding:
 .doc-actions{flex:0 0 auto;white-space:nowrap}
 .doc-note{white-space:normal;overflow-wrap:anywhere}
 @media(max-width:560px){.doc-row{gap:8px}.doc-name{font-size:13px}.doc-actions{flex:0 0 auto}}
+
+/* Quy tắc xuống dòng tên tài liệu theo số từ */
+.doc-row{align-items:flex-start}
+.doc-main{flex:1 1 auto;min-width:0}
+.doc-name.doc-name-short{
+  display:inline-block;
+  width:max-content;
+  max-width:none;
+  white-space:nowrap;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:normal;
+  word-break:normal;
+}
+.doc-name.doc-name-long{
+  display:block;
+  width:auto;
+  max-width:100%;
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:break-word;
+  word-break:normal;
+}
+.doc-actions{align-self:flex-start}
