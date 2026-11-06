@@ -176,3 +176,22 @@ div:not(.cards)>.add-folder{aspect-ratio:auto;max-width:none;width:auto;padding:
 .page-tools .hl{background:var(--navy);border-color:var(--navy);color:#fff}
 .dropzone.drag{outline:3px dashed #d29a00;outline-offset:-8px;background:#fffdf5}
 .drop-hint{text-align:center;color:var(--muted);font-size:12px;margin:14px 0 0}
+
+/* Danh sách tài liệu gọn, không đóng khung từng ô */
+.doc-list{display:flex;flex-direction:column;gap:0}
+.doc-list-head{font:700 12px var(--sans);color:var(--muted);padding:8px 2px;border-bottom:1px solid #dfe6ef;letter-spacing:.04em}
+.doc-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 4px;border-bottom:1px solid #e8edf3}
+.doc-row:last-child{border-bottom:0}
+.doc-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.doc-name{font:600 14px/1.45 var(--sans);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+.doc-name:hover{text-decoration:underline}
+.doc-name[aria-disabled="true"]{pointer-events:none;color:var(--text)}
+.doc-note{font:400 11.5px/1.4 var(--sans);color:var(--muted)}
+.doc-actions{display:flex;align-items:center;gap:5px;flex:none}
+.doc-edit{border:0;background:transparent;color:var(--ink);padding:5px 8px;border-radius:7px;font-size:12px;font-weight:700}
+.doc-edit:hover{background:var(--pill)}
+.card-wrap[draggable="true"],.doc-row[draggable="true"]{cursor:grab}
+.is-dragging{opacity:.45}
+.sort-over{outline:2px dashed #4f86b8;outline-offset:-2px;background:#edf5fc}
+.card .cv img{object-fit:cover}
+@media(max-width:560px){.doc-row{align-items:flex-start}.doc-actions{gap:2px}.doc-edit{padding:5px}}
