@@ -310,7 +310,7 @@ async function savePastedFolderImage(file) {
   try {
     const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
     const named = new File([file], "Anh-bia-" + id.slice(0, 8) + "." + ext, { type: file.type });
-    const uploaded = await uploadFile(named, tree[id].parent || id);
+    const uploaded = await uploadFile(named, settings.rootId);
     await drive(`https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions?sendNotificationEmail=false`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "reader", type: "anyone" })
