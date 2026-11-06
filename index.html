@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@600;700;800&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261106a">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261106b">
 </head>
 <body>
 <header class="top">
@@ -173,10 +173,22 @@
   </form>
 </dialog>
 
+<dialog id="dlgImage" class="dlg wide">
+  <div class="dlg-in">
+    <h3>ẢNH BÌA THƯ MỤC</h3>
+    <div id="imagePreview" class="image-preview">Chưa có ảnh bìa</div>
+    <div id="imagePasteArea" class="image-paste-area" tabindex="0" role="textbox" aria-label="Vùng dán ảnh">
+      <strong>DÁN ẢNH VÀO ĐÂY</strong>
+      <span>Sao chép ảnh từ Word, trình duyệt hoặc máy tính, sau đó nhấn Ctrl+V.</span>
+    </div>
+    <p id="imagePasteStatus" class="muted" aria-live="polite"></p>
+    <div class="dlg-act"><button type="button" class="btn" data-image-close>Đóng</button><button type="button" class="btn primary" id="imageSaveBtn" disabled>Lưu ảnh bìa</button></div>
+  </div>
+</dialog>
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="./config.js?v=20261105c"></script>
-<script type="module" src="./assets/pnd.js?v=20261106a"></script>
+<script src="./config.js?v=20261106b"></script>
+<script type="module" src="./assets/pnd.js?v=20261106b"></script>
 </body>
 </html>
