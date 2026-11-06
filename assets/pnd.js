@@ -152,14 +152,28 @@ async function loadItems() {
 const catRootId = key => settings && settings.cats ? settings.cats[key] : null;
 const childrenOf = id => Object.values(tree).filter(n => n.parent === id);
 const filesOf = id => Object.values(items).filter(f => f.parent === id);
+function sortBySavedOrder(list, fallback) {
+  if (list.some(x => Number.isFinite(x.order))) return list.sort((a, b) =>
+    (Number.isFinite(a.order) ? a.order : 1e9) - (Number.isFinite(b.order) ? b.order : 1e9) || fallback(a, b));
+  return list.sort(fallback);
+}
 function sortFolders(list) {
   const withYear = list.filter(n => yearOf(n.name)).length;
-  if (list.length && withYear >= Math.ceil(list.length / 2)) return list.sort((a, b) => (yearOf(b.name) - yearOf(a.name)) || vi.compare(a.name, b.name));
-  return list.sort((a, b) => vi.compare(a.name, b.name));
+  const fallback = list.length && withYear >= Math.ceil(list.length / 2)
+    ? (a, b) => (yearOf(b.name) - yearOf(a.name)) || vi.compare(a.name, b.name)
+    : (a, b) => vi.compare(a.name, b.name);
+  return sortBySavedOrder(list, fallback);
 }
 function sortFiles(list) {
-  return list.sort((a, b) => String(b.issued || "").localeCompare(String(a.issued || "")) || (yearOf(b.name) - yearOf(a.name)) || vi.compare(a.name, b.name));
+  return sortBySavedOrder(list, (a, b) => String(b.issued || "").localeCompare(String(a.issued || "")) || (yearOf(b.name) - yearOf(a.name)) || vi.compare(a.name, b.name));
 }
+async function saveOrder(kind, parent, ids) {
+  const batch = writeBatch(db);
+  ids.forEach((id, order) => batch.set(doc(db, kind === "folder" ? "pnd_tree" : "pnd_items", id), { order }, { merge: true }));
+  await batch.commit();
+  ids.forEach((id, order) => { const target = kind === "folder" ? tree : items; if (target[id]) target[id].order = order; });
+}
+let dragItem = null;
 function pathOf(id) { const out = []; let n = tree[id], guard = 0; while (n && guard++ < 20) { out.unshift(n); n = tree[n.parent]; } return out; }
 function countFiles(id) { let n = filesOf(id).length; for (const c of childrenOf(id)) n += countFiles(c.id); return n; }
 
@@ -230,13 +244,13 @@ function requireAccess(key) {
   return false;
 }
 function folderTools(id) {
-  return isAdmin && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
+  return isAdmin && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
 }
 function cardHTML(n, cat) {
   const cnt = loaded.items && canCat(cat.key) ? countFiles(n.id) : null;
   const y = yearOf(n.name);
   const real = tree[n.id] && tree[n.id].name === n.name;
-  return `<div class="card-wrap"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
+  return `<div class="card-wrap" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
 const upBtn = parent => isAdmin ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
 const addBtn = (parent, label) => isAdmin ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
@@ -275,6 +289,16 @@ function renderFolder(id, isCatRoot) {
   const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
   $("#main").innerHTML = `<section class="box${isAdmin ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${isAdmin ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
 }
+async function setFolderImage(id) {
+  if (!isAdmin || !tree[id]) return;
+  const current = tree[id].imageUrl || "";
+  const value = await ask("Nhập địa chỉ HTTPS của ảnh bìa thư mục. Để trống để bỏ ảnh.", { title: "ẢNH BÌA THƯ MỤC", input: "Đường dẫn ảnh", value, ok: "Lưu ảnh" });
+  if (value === null) return;
+  const url = value.trim();
+  if (url && !/^https:\/\//i.test(url)) { toast("Đường dẫn ảnh phải bắt đầu bằng https://", "err"); return; }
+  try { await setDoc(doc(db, "pnd_tree", id), { imageUrl: url || "" }, { merge: true }); tree[id].imageUrl = url; toast(url ? "Đã cập nhật ảnh bìa." : "Đã bỏ ảnh bìa.", "ok"); route(); }
+  catch (e) { toast("Chưa lưu được ảnh: " + e.message, "err"); }
+}
 function noteHTML(f) {
   const l = [];
   if (f.issuer || f.issued || f.number) l.push("Được ban hành" + (f.issued ? " ngày " + fmtDate(f.issued) : "") + (f.issuer ? " bởi " + esc(f.issuer) : "") + (f.number ? " (số " + esc(f.number) + ")" : ""));
@@ -285,11 +309,10 @@ function noteHTML(f) {
   return l.join("<br>");
 }
 function tableHTML(files, withPath) {
-  return `<div class="tbl-wrap"><table class="doc-table"><thead><tr><th>Tên văn bản</th><th>Ghi chú</th>${withPath ? "<th>Thư mục</th>" : ""}<th>Đọc</th></tr></thead><tbody>${files.map(f => `<tr>
-    <td class="nm">${f.star ? "★ " : ""}${esc(f.name)}${f.hit ? '<br><span class="muted">(khớp nội dung)</span>' : ""}</td>
-    <td class="note">${noteHTML(f)}</td>
-    ${withPath ? `<td class="note"><a data-folder="${esc(f.parent)}" style="cursor:pointer">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></td>` : ""}
-    <td class="rd">${f.link ? `<a class="open" href="${esc(f.link)}" target="_blank" rel="noopener">${f.mime === "link" ? "Mở link" : "Mở Drive"}</a>` : "—"}${isAdmin ? `<button type="button" class="adm" data-edit="${esc(f.id)}">Sửa</button><button type="button" class="adm" data-move="${esc(f.id)}">Chuyển</button>${isAdmin && f.shared === false && f.mime !== "link" ? '<span class="muted">chưa chia sẻ</span>' : ""}` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="doc-list"><div class="doc-list-head">DANH SÁCH TÀI LIỆU</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
+    <div class="doc-main"><a class="doc-name" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
+    <div class="doc-actions">${isAdmin ? `<button type="button" class="doc-edit" data-edit="${esc(f.id)}" title="Sửa thông tin">Sửa</button><button type="button" class="doc-edit" data-move="${esc(f.id)}" title="Chuyển thư mục">Chuyển</button>` : ""}${f.shared === false && f.mime !== "link" && isAdmin ? '<span class="muted">chưa chia sẻ</span>' : ""}</div>
+  </div>`).join("")}</div>`;
 }
 
 /* ---------- Tìm kiếm ---------- */
@@ -518,8 +541,9 @@ async function loadLive() {
     }
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
-    const meta = items; // dữ liệu ghi chú đã tải từ Firestore
-    for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of META) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
+    const meta = items; // dữ liệu ghi chú và thứ tự đã tải từ Firestore
+    for (const [id, n] of Object.entries(newTree)) if (tree[id]) { if (Number.isFinite(tree[id].order)) n.order = tree[id].order; if (tree[id].imageUrl) n.imageUrl = tree[id].imageUrl; }
+    for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of [...META, "order"]) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
     for (const [id, m] of Object.entries(meta)) if (m.mime === "link" && newTree[m.parent]) newItems[id] = m; // tài liệu dạng link
     if (isAdmin) for (const [id, n] of Object.entries(tree)) if (n.cat === "cho" && !newTree[id]) newTree[id] = n; // giữ Chờ phân loại khi đọc công khai
     if (isAdmin) for (const [id, m] of Object.entries(meta)) if (m.cat === "cho" && !newItems[id]) newItems[id] = m;
@@ -539,7 +563,7 @@ async function scanDrive(silent) {
     (await getDocs(collection(db, "pnd_tree"))).forEach(d => oldTree[d.id] = d.data());
     (await getDocs(collection(db, "pnd_items"))).forEach(d => oldItems[d.id] = d.data());
     const ops = [];
-    for (const [id, v] of Object.entries(newTree)) if (JSON.stringify(oldTree[id]) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v });
+    for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; if (Number.isFinite(saved.order)) v.order = saved.order; if (saved.imageUrl) v.imageUrl = saved.imageUrl; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
     for (const id of Object.keys(oldTree)) if (!newTree[id]) ops.push({ type: "del", ref: doc(db, "pnd_tree", id) });
     for (const [id, v] of Object.entries(newItems)) { const o = oldItems[id] || {}; if (["name", "mime", "link", "modified", "size", "cat", "parent", "shared"].some(k => o[k] !== v[k])) ops.push({ type: "merge", ref: doc(db, "pnd_items", id), data: v }); }
     for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link") ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
@@ -856,7 +880,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-star],[data-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -872,6 +896,7 @@ document.addEventListener("click", e => {
   else if (t.dataset.fnew) newFolder(t.dataset.fnew);
   else if (t.dataset.fren) renameFolder(t.dataset.fren);
   else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
+  else if (t.dataset.fimg) setFolderImage(t.dataset.fimg);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close")) t.closest("dialog").close();
 });
@@ -896,9 +921,23 @@ $("#loginForm").onsubmit = async e => {
 $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput").value.trim(); if (q) go("tim/" + encodeURIComponent(q)); };
 $("#btnUpload").onclick = () => openUpload();
 // Kéo thả tệp vào khung thư mục đang mở → mở hộp tải lên với đúng thư mục
-document.addEventListener("dragover", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
+document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!isAdmin || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
+document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); document.querySelectorAll(".sort-over").forEach(x => x.classList.remove("sort-over")); dragItem = null; });
+document.addEventListener("dragover", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (isAdmin && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
 document.addEventListener("dragleave", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("drag"); });
-document.addEventListener("drop", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
+document.addEventListener("drop", async e => {
+  const row = e.target.closest && e.target.closest("[data-sort-id]");
+  if (isAdmin && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
+    e.preventDefault(); row.classList.remove("sort-over");
+    const kind = dragItem.sortKind, parent = dragItem.sortParent, movingId = dragItem.sortId, targetId = row.dataset.sortId;
+    if (movingId !== targetId) {
+      const source = kind === "folder" ? sortFolders(childrenOf(parent)) : sortFiles(filesOf(parent));
+      const ids = source.map(x => x.id).filter(id => id !== movingId); const at = ids.indexOf(targetId); ids.splice(at < 0 ? ids.length : at, 0, movingId);
+      try { await saveOrder(kind, parent, ids); toast("Đã cập nhật thứ tự.", "ok"); route(); } catch (x) { toast("Không lưu được thứ tự: " + x.message, "err"); }
+    }
+    dragItem = null; return;
+  }
+  const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
 $("#btnAI").onclick = openAI;
 $("#btnScan").onclick = () => scanDrive(false);
 $("#btnInit").onclick = initTree;
