@@ -338,8 +338,8 @@ function noteHTML(f) {
   return l.join("<br>");
 }
 function tableHTML(files, withPath) {
-  return `<div class="doc-list"><div class="doc-list-head">DANH SÁCH TÀI LIỆU</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
-    <div class="doc-main"><a class="doc-name" title="${esc(f.name)}" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
+  return `<div class="doc-list"><div class="doc-list-head">DANH MỤC</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
+    <div class="doc-main"><a class="doc-name${String(f.name || "").trim().split(/\\s+/).filter(Boolean).length > 4 ? " doc-name-long" : ""}" title="${esc(f.name)}" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
     <div class="doc-actions">${isAdmin ? `<button type="button" class="doc-edit" data-edit="${esc(f.id)}" title="Sửa thông tin">Sửa</button><button type="button" class="doc-edit" data-move="${esc(f.id)}" title="Chuyển thư mục">Chuyển</button>` : ""}${f.shared === false && f.mime !== "link" && isAdmin ? '<span class="muted">chưa chia sẻ</span>' : ""}</div>
   </div>`).join("")}</div>`;
 }
