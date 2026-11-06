@@ -195,3 +195,19 @@ div:not(.cards)>.add-folder{aspect-ratio:auto;max-width:none;width:auto;padding:
 .sort-over{outline:2px dashed #4f86b8;outline-offset:-2px;background:#edf5fc}
 .card .cv img{object-fit:cover}
 @media(max-width:560px){.doc-row{align-items:flex-start}.doc-actions{gap:2px}.doc-edit{padding:5px}}
+
+/* Ảnh bìa: dán trực tiếp từ clipboard */
+.image-preview{min-height:90px;max-height:220px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:10px;padding:8px;color:var(--muted);overflow:hidden}
+.image-preview img{max-width:100%;max-height:200px;object-fit:contain}
+.image-paste-area{min-height:110px;border:2px dashed #8da8c5;border-radius:12px;background:#f6f9fc;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:18px;text-align:center;color:var(--ink);outline:none;cursor:text}
+.image-paste-area:focus{border-color:var(--navy);background:#edf5fc}
+.image-paste-area span{font-size:12px;color:var(--muted)}
+#imagePasteStatus{min-height:1.2em;margin:0}
+#imageSaveBtn:disabled{opacity:.45;cursor:not-allowed}
+/* Tên tài liệu luôn một dòng; không làm vỡ bố cục bởi tên dài */
+.doc-row{min-width:0}
+.doc-main{flex:1 1 auto;min-width:0}
+.doc-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal;max-width:100%;line-height:1.5}
+.doc-actions{flex:0 0 auto;white-space:nowrap}
+.doc-note{white-space:normal;overflow-wrap:anywhere}
+@media(max-width:560px){.doc-row{gap:8px}.doc-name{font-size:13px}.doc-actions{flex:0 0 auto}}
