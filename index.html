@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@600;700;800&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261106c">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261107a">
 </head>
 <body>
 <header class="top">
@@ -32,7 +32,7 @@
 
 <div class="layout" id="layout">
   <aside class="panel side" aria-label="Danh mục thư viện">
-    <h2 class="ptitle">DANH MỤC THƯ VIỆN</h2>
+    <h2 class="ptitle">DANH MỤC</h2>
     <nav id="catNav" class="pills"></nav>
   </aside>
 
@@ -179,8 +179,10 @@
     <div id="imagePreview" class="image-preview">Chưa có ảnh bìa</div>
     <div id="imagePasteArea" class="image-paste-area" tabindex="0" contenteditable="true" role="textbox" aria-label="Vùng dán ảnh">
       <strong>DÁN ẢNH VÀO ĐÂY</strong>
-      <span>Sao chép ảnh từ Word, trình duyệt hoặc máy tính, sau đó nhấn Ctrl+V.</span>
+      <span>Sao chép ảnh rồi nhấn Ctrl+V, hoặc chọn ảnh từ máy bên dưới.</span>
     </div>
+    <label class="image-file-label" for="imageFileInput">Chọn ảnh từ máy</label>
+    <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
     <p id="imagePasteStatus" class="muted" aria-live="polite"></p>
     <div class="dlg-act"><button type="button" class="btn" data-image-close>Đóng</button><button type="button" class="btn primary" id="imageSaveBtn" disabled>Lưu ảnh bìa</button></div>
   </div>
@@ -188,7 +190,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="./config.js?v=20261106c"></script>
-<script type="module" src="./assets/pnd.js?v=20261106c"></script>
+<script src="./config.js?v=20261107a"></script>
+<script type="module" src="./assets/pnd.js?v=20261107a"></script>
 </body>
 </html>
