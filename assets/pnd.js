@@ -293,6 +293,11 @@ let imageTargetFolder = null;
 function setFolderImage(id) {
   if (!isAdmin || !tree[id]) return;
   imageTargetFolder = id;
+  $("#imageSaveBtn").disabled = true;
+  $("#imageSaveBtn").onclick = null;
+  $("#imageFileInput").value = "";
+  $("#imagePasteArea").textContent = "";
+  $("#imagePasteArea").innerHTML = "<strong>DÁN ẢNH VÀO ĐÂY</strong><span>Sao chép ảnh rồi nhấn Ctrl+V, hoặc chọn ảnh từ máy bên dưới.</span>";
   const d = $("#dlgImage"), preview = $("#imagePreview");
   const current = tree[id].imageUrl || "";
   preview.innerHTML = current ? `<img src="${esc(current)}" alt="Ảnh bìa hiện tại">` : "Chưa có ảnh bìa";
@@ -374,15 +379,41 @@ function openLogin(hint) {
   $("#loginErr").textContent = ""; if (hint) $("#codeHint").textContent = hint;
   setLoginTab("code"); const d = $("#dlgLogin"); if (!d.open) d.showModal(); setTimeout(() => $("#codeInput").focus(), 50);
 }
-function setLoginTab(t) { loginTab = t; $("#imagePasteArea").addEventListener("paste", e => {
+function setLoginTab(t) { loginTab = t;
+document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
+
+/* Đăng ký thao tác ảnh độc lập với tab đăng nhập, chỉ một lần. */
+let imagePreviewObjectUrl = null;
+function selectFolderCover(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    $("#imagePasteStatus").textContent = "Hãy chọn ảnh PNG, JPG, WebP hoặc GIF.";
+    return;
+  }
+  if (file.size > 12 * 1024 * 1024) {
+    $("#imagePasteStatus").textContent = "Ảnh vượt quá 12 MB. Hãy chọn ảnh nhỏ hơn.";
+    return;
+  }
+  if (imagePreviewObjectUrl) URL.revokeObjectURL(imagePreviewObjectUrl);
+  imagePreviewObjectUrl = URL.createObjectURL(file);
+  $("#imagePreview").innerHTML = `<img src="${esc(imagePreviewObjectUrl)}" alt="Ảnh đã chọn">`;
+  $("#imagePasteStatus").textContent = "Đã nhận ảnh. Bấm “Lưu ảnh bìa” để tải lên Google Drive.";
+  $("#imageSaveBtn").disabled = false;
+  $("#imageSaveBtn").onclick = () => savePastedFolderImage(file);
+}
+$("#imagePasteArea").addEventListener("paste", e => {
   const image = [...(e.clipboardData?.items || [])].find(x => x.type.startsWith("image/"));
-  if (!image) { $("#imagePasteStatus").textContent = "Clipboard không chứa ảnh. Hãy sao chép ảnh rồi nhấn Ctrl+V."; return; }
+  if (!image) {
+    $("#imagePasteStatus").textContent = "Clipboard chưa có ảnh. Hãy thử “Chọn ảnh từ máy”.";
+    return;
+  }
   e.preventDefault();
-  const file = image.getAsFile();
-  if (file) { $("#imagePreview").innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Ảnh vừa dán">`; $("#imagePasteStatus").textContent = "Đã nhận ảnh. Bấm “Lưu ảnh bìa” để tải lên."; $("#imageSaveBtn").onclick = () => savePastedFolderImage(file); }
+  selectFolderCover(image.getAsFile());
+});
+$("#imageFileInput").addEventListener("change", e => {
+  const file = e.target.files && e.target.files[0];
+  if (file) selectFolderCover(file);
 });
 $("#imagePasteArea").addEventListener("click", () => $("#imagePasteArea").focus());
-document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
 async function ensureUser() { if (auth.currentUser) return auth.currentUser; const r = await signInAnonymously(auth); return r.user; }
 async function useCode(raw) {
   try { return await useCode0(raw); } catch (e) { if (/^Mã /.test(e.message)) e.invalidCode = true; throw e; }
@@ -579,7 +610,7 @@ async function loadLive() {
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
     const meta = items; // dữ liệu ghi chú và thứ tự đã tải từ Firestore
-    for (const [id, n] of Object.entries(newTree)) if (tree[id]) { if (Number.isFinite(tree[id].order)) n.order = tree[id].order; if (tree[id].imageUrl) n.imageUrl = tree[id].imageUrl; }
+    for (const [id, n] of Object.entries(newTree)) if (tree[id]) { if (Number.isFinite(tree[id].order)) n.order = tree[id].order; if (tree[id].imageUrl) n.imageUrl = tree[id].imageUrl; if (tree[id].imageFileId) n.imageFileId = tree[id].imageFileId; }
     for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of [...META, "order"]) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
     for (const [id, m] of Object.entries(meta)) if (m.mime === "link" && newTree[m.parent]) newItems[id] = m; // tài liệu dạng link
     if (isAdmin) for (const [id, n] of Object.entries(tree)) if (n.cat === "cho" && !newTree[id]) newTree[id] = n; // giữ Chờ phân loại khi đọc công khai
@@ -600,7 +631,7 @@ async function scanDrive(silent) {
     (await getDocs(collection(db, "pnd_tree"))).forEach(d => oldTree[d.id] = d.data());
     (await getDocs(collection(db, "pnd_items"))).forEach(d => oldItems[d.id] = d.data());
     const ops = [];
-    for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; if (Number.isFinite(saved.order)) v.order = saved.order; if (saved.imageUrl) v.imageUrl = saved.imageUrl; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
+    for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; if (Number.isFinite(saved.order)) v.order = saved.order; if (saved.imageUrl) v.imageUrl = saved.imageUrl; if (saved.imageFileId) v.imageFileId = saved.imageFileId; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
     for (const id of Object.keys(oldTree)) if (!newTree[id]) ops.push({ type: "del", ref: doc(db, "pnd_tree", id) });
     for (const [id, v] of Object.entries(newItems)) { const o = oldItems[id] || {}; if (["name", "mime", "link", "modified", "size", "cat", "parent", "shared"].some(k => o[k] !== v[k])) ops.push({ type: "merge", ref: doc(db, "pnd_items", id), data: v }); }
     for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link") ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
