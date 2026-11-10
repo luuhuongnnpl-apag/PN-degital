@@ -1,0 +1,79 @@
+rules_version = '2';
+// Quy tắc bảo mật Firestore — Phúc Nguyên Digital (phân quyền 10/11/2026)
+// Vai trò: xem | xem-rong | chuyen-muc | bien-muc | quan-tri  (tài khoản: pnd_accounts/{email}; mã dùng chung: pnd_ma/{mã})
+// Mức truy cập tài liệu (trường access): cong-khai | noi-bo | han-che | mat
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function email() { return request.auth.token.get('email', ''); }
+    function superAdmin() {
+      return signedIn() && (
+        request.auth.uid == 'smoIpuX7qseqTeu9nToc9RYigku1' ||
+        (email().lower() in ['luuhuong.dhnv@gmail.com', 'luuhuong.nnpl@gmail.com'] && request.auth.token.get('email_verified', false) == true));
+    }
+    function acctPath() { return /databases/$(database)/documents/pnd_accounts/$(email().lower()); }
+    function hasAcct() { return signedIn() && email() != '' && exists(acctPath()); }
+    function okGrant(g) { return g.get('disabled', false) != true && (g.get('hanTs', null) == null || request.time < g.hanTs); }
+    function acctOk() { return hasAcct() && okGrant(get(acctPath()).data); }
+    function acct() { return get(acctPath()).data; }
+    function userPath() { return /databases/$(database)/documents/pnd_users/$(request.auth.uid); }
+    function hasCode() { return signedIn() && exists(userPath()) && exists(/databases/$(database)/documents/pnd_ma/$(get(userPath()).data.code)); }
+    function codeData() { return get(/databases/$(database)/documents/pnd_ma/$(get(userPath()).data.code)).data; }
+
+    function isAdmin() { return superAdmin() || (acctOk() && acct().role == 'quan-tri'); }
+    function isManager() { return isAdmin() || (acctOk() && acct().role == 'bien-muc'); }
+    function levels(role) {
+      return role == 'quan-tri' ? ['cong-khai', 'noi-bo', 'han-che', 'mat']
+           : role == 'xem' ? ['cong-khai', 'noi-bo']
+           : ['cong-khai', 'noi-bo', 'han-che'];
+    }
+    function grantAllows(g, d) {
+      return okGrant(g) && d.get('access', 'noi-bo') in levels(g.get('role', 'chuyen-muc'))
+        && (g.get('cats', ['*']).hasAny(['*']) || g.get('cats', []).hasAny([d.cat]));
+    }
+    function canRead(d) {
+      return isAdmin()
+        || d.get('access', '') == 'cong-khai'
+        || (hasAcct() && grantAllows(acct(), d))
+        || (hasCode() && grantAllows(codeData(), d));
+    }
+
+    // Cấu hình, cây thư mục: ai cũng đọc (tên thư mục), chỉ người quản lý được ghi
+    match /pnd_settings/{id} { allow read: if true; allow write: if isManager(); }
+    match /pnd_tree/{id} { allow read: if true; allow write: if isManager(); }
+
+    // Tài liệu: đọc theo mức truy cập + vai trò + danh mục
+    match /pnd_items/{id} {
+      allow read: if canRead(resource.data);
+      allow create, update: if isManager() && (request.resource.data.get('access', 'noi-bo') != 'mat' || isAdmin());
+      allow delete: if isManager();
+    }
+
+    // Tài khoản: người dùng đọc hồ sơ của chính mình; quản trị viên quản lý
+    match /pnd_accounts/{em} {
+      allow get: if signedIn() && (email().lower() == em || isAdmin());
+      allow list, write: if isAdmin();
+    }
+
+    // Mã truy cập dùng chung
+    match /pnd_ma/{code} {
+      allow get: if signedIn();
+      allow list, write: if isAdmin();
+      match /luot/{uid} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.auth.uid == uid;
+        allow delete: if isAdmin();
+      }
+    }
+    match /pnd_users/{uid} {
+      allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Nhật ký thao tác
+    match /pnd_activity/{id} {
+      allow create: if signedIn();
+      allow read, delete: if isAdmin();
+    }
+  }
+}

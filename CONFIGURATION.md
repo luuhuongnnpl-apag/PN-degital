@@ -39,3 +39,22 @@ Quy tắc: cây thư mục và cấu hình công khai; tài liệu chỉ đọc 
 Drive API, Picker API bật; OAuth External/In production, phạm vi `drive` (hạn chế — Google hiện cảnh báo "ứng dụng chưa xác minh" khi quản trị đăng nhập: Nâng cao → Tiếp tục).
 
 Bản trước khi chuyển: nhánh `backup-truoc-firebase-20261104`.
+
+## Phân quyền (10/11/2026)
+**Mức truy cập tài liệu** (trường `access` của `pnd_items`, đặt riêng từng tài liệu hoặc mặc định theo thư mục trong `pnd_tree.access`):
+Công khai (`cong-khai`) · Nội bộ (`noi-bo`, mặc định) · Hạn chế (`han-che`) · Mật (`mat`, chỉ quản trị).
+
+**Vai trò** (dùng chung cho tài khoản `pnd_accounts/{email}` và mã truy cập `pnd_ma/{mã}`):
+| Vai trò | Xem | Tải về | Tải lên, quản lý |
+|---|---|---|---|
+| Khách (chưa đăng nhập) | Công khai | — | — |
+| `xem` Độc giả | Công khai, Nội bộ | — | — |
+| `xem-rong` Độc giả mở rộng | Công khai, Nội bộ, Hạn chế | — | — |
+| `chuyen-muc` Người dùng chuyên mục | Công khai, Nội bộ, Hạn chế (theo danh mục) | ✓ | — |
+| `bien-muc` Thủ thư / Biên mục | Công khai, Nội bộ, Hạn chế | ✓ | ✓ |
+| `quan-tri` Quản trị hệ thống | Tất cả, kể cả Mật | ✓ | ✓ + cấp tài khoản |
+
+- Tài khoản tên đăng nhập: Firebase Email/Mật khẩu với email `<tên>@taikhoan.pnd`; tài khoản Google: đăng nhập Google bằng email đã cấp.
+- Thủ thư muốn tải tệp lên cần tài khoản Google có quyền chỉnh sửa thư mục PND trên Drive (tick “Cấp quyền chỉnh sửa thư mục PND” khi cấp tài khoản).
+- Chặn tải về là chặn trên giao diện web (ẩn nút mở/tải, che nút mở rộng của khung xem trước); ai đã có đường link Drive vẫn mở được tệp.
+- Quy tắc bảo mật: `firestore.rules` — dán vào Firebase Console → Firestore → Rules, xuất bản cùng lúc với giao diện mới.
