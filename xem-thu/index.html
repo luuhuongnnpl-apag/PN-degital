@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phúc Nguyên Digital</title>
+<meta name="description" content="Phúc Nguyên Digital — Không gian tri thức trong tầm tay: quản lý tài liệu trực tuyến, cung cấp học liệu và tri thức đời sống.">
+<link rel="icon" href="./assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261110a">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="#" data-home>
+      <img src="./assets/logo.png" alt="Logo Phúc Nguyên">
+      <span class="brand-name">PHÚC NGUYÊN DIGITAL</span>
+    </a>
+    <nav class="top-act" aria-label="Thao tác">
+      <button type="button" class="tbtn hl admin-only" id="btnUpload">＋ Tải / Gắn tài liệu</button>
+      <button type="button" class="tbtn admin-only" data-go="tai-khoan">Mã tài khoản</button>
+      <span id="whoami" class="whoami"></span>
+      <button type="button" id="btnLogin" class="tbtn">Đăng nhập</button>
+      <button type="button" id="btnLogout" class="tbtn ghost">Thoát</button>
+    </nav>
+  </div>
+</header>
+
+<section class="hero" aria-label="Giới thiệu">
+  <div class="hero-in">
+    <img src="./assets/logo.png" alt="" class="hero-logo">
+    <div>
+      <h1 class="hero-title">PHÚC NGUYÊN DIGITAL</h1>
+      <p class="hero-sub">KHÔNG GIAN TRI THỨC TRONG TẦM TAY • TÀI LIỆU SỐ</p>
+    </div>
+  </div>
+</section>
+
+<div class="layout" id="layout">
+  <aside class="side-nav" aria-label="Danh mục thư viện">
+    <h2 class="sec-title">DANH MỤC</h2>
+    <nav id="catNav" class="catnav"></nav>
+  </aside>
+
+  <div class="content">
+    <h2 class="sec-title">DANH MỤC TÀI LIỆU SỐ</h2>
+    <form id="searchForm" class="searchbar" role="search">
+      <input id="searchInput" type="search" placeholder="Nhập nội dung tìm kiếm (tên văn bản, số ký hiệu, cơ quan ban hành, ghi chú)…" aria-label="Tìm kiếm tài liệu">
+      <button type="submit">TÌM</button>
+    </form>
+    <main id="main" class="main"></main>
+  </div>
+
+  <aside class="side-extra" id="toolsCol" aria-label="Tổng quan và công cụ">
+    <section class="sbox">
+      <h3 class="sbox-title">TỔNG QUAN KHO TÀI LIỆU</h3>
+      <dl id="stats" class="stats"></dl>
+    </section>
+    <section class="sbox">
+      <h3 class="sbox-title">CÔNG CỤ</h3>
+      <button type="button" class="sbtn primary" id="btnAI">Hỏi trợ lý AI</button>
+      <div class="admin-only" id="adminTools">
+        <button type="button" class="sbtn" id="btnScan">Quét Google Drive</button>
+        <button type="button" class="sbtn" id="btnInit">Khởi tạo cây thư mục</button>
+        <button type="button" class="sbtn" id="btnShare">Mở chia sẻ xem tài liệu</button>
+        <button type="button" class="sbtn" id="btnSource">Thêm nguồn Drive</button>
+        <p class="muted" id="adminNote"></p>
+      </div>
+    </section>
+    <section class="sbox">
+      <h3 class="sbox-title">LIÊN KẾT</h3>
+      <div id="linkList" class="linklist"></div>
+    </section>
+  </aside>
+</div>
+
+<footer class="foot"><b>PHÚC NGUYÊN DIGITAL</b> • Không gian tri thức trong tầm tay · © Bản quyền: Phúc Nguyên</footer>
+
+<!-- Đăng nhập: mã tài khoản hoặc quản trị -->
+<dialog id="dlgLogin" class="dlg">
+  <form method="dialog" class="dlg-in" id="loginForm" novalidate>
+    <h3>ĐĂNG NHẬP</h3>
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab on" data-tab="code">Mã tài khoản</button>
+      <button type="button" class="tab" data-tab="admin">Quản trị</button>
+    </div>
+    <div data-pane="code">
+      <p class="muted" id="codeHint">Nhập mã tài khoản do giảng viên cấp để xem tài liệu.</p>
+      <label class="fld"><span>Mã tài khoản</span><input id="codeInput" autocomplete="off" spellcheck="false" placeholder="Ví dụ: PND2026" style="text-transform:uppercase"></label>
+    </div>
+    <div data-pane="admin" hidden>
+      <p class="muted">Tài khoản quản trị dùng chung cho cả hệ sinh thái Phúc Nguyên (PN Library, PN Work, PN Digital): đăng nhập một lần trên máy này là dùng được cả ba trang, cho tới khi bấm Thoát.</p>
+      <label class="fld"><span>Email</span><input id="admEmail" type="email" autocomplete="username" placeholder="luuhuong.nnpl@gmail.com"></label>
+      <label class="fld"><span>Mật khẩu</span><input id="admPass" type="password" autocomplete="current-password"></label>
+      <p class="muted">Hoặc để trống hai ô trên và bấm Đăng nhập để dùng <b>tài khoản Google</b> (luuhuong.dhnv@gmail.com).</p>
+    </div>
+    <p class="err" id="loginErr" role="alert"></p>
+    <div class="dlg-act">
+      <button type="button" class="btn" data-close>Hủy</button>
+      <button type="submit" class="btn primary" id="loginGo">Xác nhận</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Tải lên / gắn tài liệu -->
+<dialog id="dlgUpload" class="dlg wide">
+  <form method="dialog" class="dlg-in" id="upForm" novalidate>
+    <h3 id="upTitle">TẢI / GẮN TÀI LIỆU</h3>
+    <div class="tabs four" role="tablist">
+      <button type="button" class="tab on" data-up="file">Tải tệp từ máy tính</button>
+      <button type="button" class="tab" data-up="drive">Gắn từ Google Drive</button>
+      <button type="button" class="tab" data-up="bulk">Gắn nhiều link cùng lúc</button>
+      <button type="button" class="tab" data-up="link">Liên kết web</button>
+    </div>
+    <div class="grid2">
+      <label class="fld"><span>Danh mục</span><select id="upCat"></select></label>
+      <label class="fld"><span>Thư mục lưu</span><select id="upFolder"></select></label>
+    </div>
+    <label class="fld" id="newFolderWrap" hidden><span>Tên thư mục mới (tạo bên trong thư mục đã chọn, để trống nếu không cần)</span><input id="upNewFolder" placeholder="Ví dụ: Luật Đất đai 2024 và các văn bản hướng dẫn thi hành"></label>
+
+    <div data-uppane="file">
+      <label class="drop" id="drop"><input type="file" id="upFiles" multiple hidden><b>Kéo thả tệp vào đây hoặc bấm để chọn</b><span id="dropText">Chọn được nhiều tệp, tối đa 50 MB mỗi tệp. Tệp được lưu vào đúng thư mục Drive đã chọn.</span></label>
+    </div>
+    <div data-uppane="drive" hidden>
+      <label class="fld"><span>Link hoặc mã tệp / thư mục đã có trên Google Drive</span><input id="upDrive" placeholder="https://drive.google.com/file/d/…/view"></label>
+      <p class="hint">Tệp giữ nguyên vị trí trên Drive, không phải tải lại. Dán link thư mục thì mọi tệp trong thư mục đó được gắn cùng lúc.</p>
+      <label class="fld chk inline"><input type="checkbox" id="upDriveShare" checked><span>Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” để người dùng mã mở được tệp</span></label>
+    </div>
+    <div data-uppane="bulk" hidden>
+      <label class="fld"><span>Danh sách tài liệu — mỗi dòng một tài liệu: <code>Tên tài liệu | Link</code> hoặc chỉ dán link</span><textarea id="upBulk" rows="6" placeholder="Luật Đất đai 2024 | https://drive.google.com/file/d/…/view&#10;https://drive.google.com/file/d/…/view&#10;Cổng thông tin Chính phủ | https://chinhphu.vn"></textarea></label>
+      <p class="hint">Link Google Drive tự lấy tên tệp khi để trống tên. Thông tin ban hành bên dưới áp dụng cho tất cả.</p>
+      <label class="fld chk inline"><input type="checkbox" id="upBulkShare" checked><span>Mở chia sẻ xem cho các tệp Google Drive trong danh sách</span></label>
+    </div>
+    <div data-uppane="link" hidden>
+      <label class="fld"><span>Đường link tài liệu</span><input id="upUrl" type="url" placeholder="https://…"></label>
+    </div>
+
+    <label class="fld" id="upNameWrap"><span>Tên văn bản (để trống: lấy tên tệp)</span><input id="upName"></label>
+    <div class="grid2">
+      <label class="fld"><span>Cơ quan / người ban hành</span><input id="upIssuer" placeholder="Ví dụ: Quốc hội"></label>
+      <label class="fld"><span>Số / ký hiệu</span><input id="upNumber" placeholder="Ví dụ: 31/2024/QH15"></label>
+      <label class="fld"><span>Ngày ban hành</span><input id="upIssued" type="date"></label>
+      <label class="fld"><span>Hiệu lực từ ngày</span><input id="upEffective" type="date"></label>
+      <label class="fld"><span>Tình trạng hiệu lực</span><select id="upStatus"><option value="">—</option><option>Còn hiệu lực</option><option>Hết hiệu lực</option><option>Hết hiệu lực một phần</option><option>Chưa có hiệu lực</option><option>Dự thảo</option><option>Không áp dụng</option></select></label>
+      <label class="fld chk"><input type="checkbox" id="upStar"><span>Đưa vào mục THÔNG DỤNG ★</span></label>
+    </div>
+    <label class="fld"><span>Ghi chú / tóm tắt nội dung</span><textarea id="upNote" rows="2"></textarea></label>
+    <div class="fld"><span>Ảnh bìa tài liệu (tùy chọn — để trống thì dùng trang đầu của tệp hoặc bìa mặc định)</span>
+      <div class="cover-pick" id="upCover" tabindex="0" role="button" aria-label="Chọn ảnh bìa">
+        <span class="cp-prev"></span>
+        <span class="cp-text"><b>Kéo thả ảnh vào đây, dán (Ctrl+V) hoặc bấm để chọn</b><small>JPG, PNG, WebP — tối đa 12 MB</small></span>
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      </div>
+    </div>
+    <p class="err" id="upErr" role="alert"></p><p class="muted" id="upMsg" aria-live="polite"></p>
+    <div class="dlg-act">
+      <button type="button" class="btn" data-close>Đóng</button>
+      <button type="submit" class="btn primary" id="upGo">Lưu vào thư viện</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Chi tiết tài liệu -->
+<dialog id="dlgDoc" class="dlg xwide">
+  <div class="dlg-in">
+    <div class="doc-head"><h3 id="docTitle"></h3><button type="button" class="x" data-close aria-label="Đóng">×</button></div>
+    <div class="doc-detail">
+      <div class="doc-preview" id="docPreview"></div>
+      <div class="doc-side"><dl class="doc-info" id="docInfo"></dl><div class="doc-acts" id="docActs"></div></div>
+    </div>
+  </div>
+</dialog>
+
+<!-- Sửa thông tin tài liệu -->
+<dialog id="dlgEdit" class="dlg wide">
+  <form method="dialog" class="dlg-in" id="edForm" novalidate>
+    <h3>THÔNG TIN TÀI LIỆU</h3>
+    <label class="fld"><span>Tên văn bản</span><input id="edName"></label>
+    <div class="grid2">
+      <label class="fld"><span>Cơ quan / người ban hành</span><input id="edIssuer"></label>
+      <label class="fld"><span>Số / ký hiệu</span><input id="edNumber"></label>
+      <label class="fld"><span>Ngày ban hành</span><input id="edIssued" type="date"></label>
+      <label class="fld"><span>Hiệu lực từ ngày</span><input id="edEffective" type="date"></label>
+      <label class="fld"><span>Tình trạng hiệu lực</span><select id="edStatus"><option value="">—</option><option>Còn hiệu lực</option><option>Hết hiệu lực</option><option>Hết hiệu lực một phần</option><option>Chưa có hiệu lực</option><option>Dự thảo</option><option>Không áp dụng</option></select></label>
+      <label class="fld chk"><input type="checkbox" id="edStar"><span>THÔNG DỤNG ★</span></label>
+    </div>
+    <label class="fld"><span>Ghi chú / tóm tắt nội dung</span><textarea id="edNote" rows="2"></textarea></label>
+    <div class="fld"><span>Ảnh bìa tài liệu</span>
+      <div class="cover-pick" id="edCover" tabindex="0" role="button" aria-label="Chọn ảnh bìa">
+        <span class="cp-prev"></span>
+        <span class="cp-text"><b>Kéo thả ảnh vào đây, dán (Ctrl+V) hoặc bấm để chọn</b><small>JPG, PNG, WebP — tối đa 12 MB</small></span>
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      </div>
+      <button type="button" class="linkish" id="edCoverClear">Xóa ảnh riêng (dùng bìa mặc định)</button>
+    </div>
+    <p class="err" id="edErr" role="alert"></p><p class="muted" id="edMsg" aria-live="polite"></p>
+    <div class="dlg-act">
+      <button type="button" class="btn" data-close>Hủy</button>
+      <button type="submit" class="btn primary" id="edGo">Lưu</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Hỏi AI -->
+<dialog id="dlgAI" class="dlg wide">
+  <div class="dlg-in">
+    <h3>HỎI TRỢ LÝ AI</h3>
+    <p class="muted">Trợ lý Gemini trả lời dựa trên danh mục tài liệu bạn được xem trong Phúc Nguyên Digital. Hãy kiểm tra lại với văn bản gốc trước khi sử dụng.</p>
+    <div id="aiLog" class="ai-log" aria-live="polite"></div>
+    <form id="aiForm" class="ai-form"><textarea id="aiInput" rows="2" placeholder="Ví dụ: Quy chế nào quy định giờ chuẩn nghiên cứu khoa học?"></textarea><button class="btn primary" type="submit">Gửi</button></form>
+    <div class="dlg-act"><button type="button" class="btn" data-close>Đóng</button></div>
+  </div>
+</dialog>
+
+<!-- Xác nhận (thay cho hộp thoại trình duyệt) -->
+<dialog id="dlgConfirm" class="dlg">
+  <form method="dialog" class="dlg-in">
+    <h3 id="cfTitle">XÁC NHẬN</h3>
+    <p id="cfMsg" style="margin:0;white-space:pre-line"></p>
+    <label class="fld" id="cfInputWrap" hidden><span id="cfInputLbl"></span><input id="cfInput" autocomplete="off" spellcheck="false"></label>
+    <select id="cfSelect" class="fld-sel" hidden></select>
+    <div class="dlg-act"><button type="button" class="btn" id="cfNo">Hủy</button><button type="button" class="btn primary" id="cfYes">Đồng ý</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgImage" class="dlg wide">
+  <div class="dlg-in">
+    <h3>ẢNH BÌA THƯ MỤC</h3>
+    <div id="imagePreview" class="image-preview">Chưa có ảnh bìa</div>
+    <div id="imagePasteArea" class="image-paste-area" tabindex="0" contenteditable="true" role="textbox" aria-label="Vùng dán ảnh">
+      <strong>DÁN ẢNH VÀO ĐÂY</strong>
+      <span>Sao chép ảnh rồi nhấn Ctrl+V, kéo thả ảnh vào đây, hoặc chọn ảnh từ máy bên dưới.</span>
+    </div>
+    <label class="image-file-label" for="imageFileInput">Chọn ảnh từ máy</label>
+    <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+    <p id="imagePasteStatus" class="muted" aria-live="polite"></p>
+    <div class="dlg-act"><button type="button" class="btn" data-image-close>Đóng</button><button type="button" class="btn primary" id="imageSaveBtn" disabled>Lưu ảnh bìa</button></div>
+  </div>
+</dialog>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="./config.js?v=20261110a"></script>
+<script type="module" src="./assets/pnd.js?v=20261110a"></script>
+</body>
+</html>
