@@ -1,3 +1,7 @@
+// LƯU Ý (10/11/2026): Firestore dùng chung cho PNL, PNW, PND. Bản đang chạy là một tệp quy tắc chung trên Firebase Console;
+// phần PND trong đó dùng đúng logic dưới đây nhưng tên hàm có tiền tố pnd (pndAdmin, pndManager, pndCanRead…) và
+// dựa vào hàm isAdmin(), signedIn() cùng khối mặc định "chỉ quản trị đọc/ghi mọi thứ" của tệp chung.
+// Khi sửa quy tắc: chỉ thay khối "===== PND - Phúc Nguyên Digital =====", không ghi đè cả tệp.
 rules_version = '2';
 // Quy tắc bảo mật Firestore — Phúc Nguyên Digital (phân quyền 10/11/2026)
 // Vai trò: xem | xem-rong | chuyen-muc | bien-muc | quan-tri  (tài khoản: pnd_accounts/{email}; mã dùng chung: pnd_ma/{mã})
