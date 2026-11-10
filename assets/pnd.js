@@ -349,7 +349,7 @@ function renderHome() {
       : `<p class="empty">Tài liệu được đánh dấu ★ sẽ hiện ở đây.${isAdmin ? " (Đánh dấu khi tải lên hoặc bấm Sửa ở tài liệu.)" : ""}</p>`;
   const catCards = visibleCats().map(c => {
     const n = catCount(c.key);
-    return `<div class="card-wrap"><button type="button" class="card" data-cat="${c.key}"><span class="cv">${cover(c.icon, c.color)}</span><span class="nm">${esc(c.name)}</span><span class="ct">${n != null ? n + " tài liệu" : canCat(c.key) ? "" : "Cần mã tài khoản"}</span></button></div>`;
+    return `<div class="card-wrap"><button type="button" class="card" data-cat="${c.key}"><span class="cv">${cover(c.icon, c.color)}</span><span class="nm">${esc(c.name)}</span></button></div>`;
   }).join("");
   const recent = loaded.items
     ? Object.values(items).filter(f => canSee(f) && f.cat !== "cho").sort((a, b) => String(b.added || b.modified || "").localeCompare(String(a.added || a.modified || ""))).slice(0, 10)
@@ -374,7 +374,7 @@ function cardHTML(n, cat) {
   const cnt = loaded.items && canCat(cat.key) ? countFiles(n.id) : null;
   const y = yearOf(n.name);
   const real = tree[n.id] && tree[n.id].name === n.name;
-  return `<div class="card-wrap" draggable="${canUp() ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
+  return `<div class="card-wrap" draggable="${canUp() ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
 const upBtn = parent => canUp() ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
 const addBtn = (parent, label) => canUp() ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
@@ -412,7 +412,7 @@ function renderFolder(id, isCatRoot) {
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
   const crumbs = `<div class="crumbs"><a data-home>Trang chủ</a>${path.map((p, i) => `<span class="sep">/</span>` + (i === path.length - 1 ? `<span>${esc(i === 0 ? cat.name : p.name)}</span>` : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`)).join("")}</div>`;
   const tools = canUp() && node.depth <= 1 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button></div>` : canUp() && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
-  $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
+  $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên. Kéo một tài liệu hoặc thư mục thả vào giữa thẻ thư mục khác (hoặc vào tên thư mục ở cột trái) để chuyển vào đó; thả vào mép thẻ để đổi thứ tự.</p>' : ""}${navRow()}</section>`;
 }
 let imageTargetFolder = null;
 function setFolderImage(id) {
@@ -975,18 +975,48 @@ async function moveTo(id, isFolder) {
   const cur = isFolder ? tree[id] : items[id]; if (!cur) return;
   const target = await ask("Chuyển “" + cur.name + "” sang thư mục:", { title: isFolder ? "CHUYỂN THƯ MỤC" : "CHUYỂN TÀI LIỆU", options: allFolderOptions(isFolder ? id : null), ok: "Chuyển" });
   if (!target || target === cur.parent) return;
-  try {
-    if (!isFolder && cur.mime === "link") { await setDoc(doc(db, "pnd_items", id), { parent: target, cat: tree[target].cat }, { merge: true }); }
-    else {
-      const f = await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents");
-      await drive("https://www.googleapis.com/drive/v3/files/" + id + "?addParents=" + target + "&removeParents=" + (f.parents || []).join(",") + "&fields=id", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
-    }
-    await logAct("MOVE", cur.name + " → " + (tree[target] ? tree[target].name : target));
-    toast("Đã chuyển “" + cur.name + "”. Đang cập nhật…", "ok");
-    await scanDrive(true);
-    go("f/" + encodeURIComponent(target));
-  } catch (x) { toast("Chưa chuyển được: " + x.message, "err"); }
+  if (await doMove(id, isFolder, target)) go("f/" + encodeURIComponent(target));
 }
+const folderLabel = id => tree[id] ? (tree[id].depth <= 1 ? CAT[tree[id].cat].name : tree[id].name) : id;
+/* Chuyển tài liệu hoặc cả thư mục (kèm mọi thứ bên trong) sang thư mục khác — dùng cho nút Chuyển và kéo thả */
+async function doMove(id, isFolder, target) {
+  const cur = isFolder ? tree[id] : items[id]; if (!cur || !tree[target] || target === cur.parent) return false;
+  if (isFolder && subtreeIds(id).includes(target)) { toast("Không chuyển được thư mục vào chính nó hoặc thư mục con của nó.", "err"); return false; }
+  try {
+    const driveFile = isFolder || cur.mime !== "link";
+    if (driveFile) {
+      const f = await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents&supportsAllDrives=true");
+      await drive("https://www.googleapis.com/drive/v3/files/" + id + "?addParents=" + target + "&removeParents=" + (f.parents || []).join(",") + "&fields=id&supportsAllDrives=true", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
+    }
+    await logAct("MOVE", cur.name + " → " + folderLabel(target));
+    if (isFolder) { toast("Đã chuyển thư mục “" + cur.name + "” vào “" + folderLabel(target) + "”. Đang cập nhật…", "ok"); await scanDrive(true); }
+    else {
+      await setDoc(doc(db, "pnd_items", id), { parent: target, cat: tree[target].cat }, { merge: true });
+      cur.parent = target; cur.cat = tree[target].cat; delete cur.order;
+      toast("Đã chuyển “" + cur.name + "” vào “" + folderLabel(target) + "”.", "ok"); route();
+    }
+    return true;
+  } catch (x) { toast("Chưa chuyển được: " + x.message, "err"); return false; }
+}
+/* Kéo thả: thả vào giữa thẻ thư mục (hoặc tên thư mục ở cột trái, đường dẫn) = chuyển vào; thả vào mép thẻ cùng cấp = đổi thứ tự */
+function dropTarget(e) {
+  if (!canUp() || !dragItem || !e.target.closest) return null;
+  let fid = null, el = null;
+  const card = e.target.closest('[data-sort-kind="folder"]');
+  if (card) {
+    const r = card.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+    const canReorder = dragItem.sortKind === "folder" && card.dataset.sortParent === dragItem.sortParent;
+    if (!canReorder || (x > 0.22 && x < 0.78)) { fid = card.dataset.sortId; el = card; }
+  } else {
+    const t = e.target.closest(".catnav [data-folder], .catnav [data-cat], .crumbs a[data-folder], .ftbl a[data-folder]");
+    if (t) { fid = t.dataset.folder || catRootId(t.dataset.cat); el = t; }
+  }
+  if (!fid || !tree[fid] || fid === dragItem.sortId) return null;
+  const isF = dragItem.sortKind === "folder", cur = isF ? tree[dragItem.sortId] : items[dragItem.sortId];
+  if (!cur || cur.parent === fid || (isF && subtreeIds(dragItem.sortId).includes(fid))) return null;
+  return { fid, el };
+}
+const clearDropMarks = () => document.querySelectorAll(".drop-into,.sort-over").forEach(x => x.classList.remove("drop-into", "sort-over"));
 
 function setBusy(sel, on, label) { const b = $(sel); if (b) { b.disabled = on; b.textContent = label; } }
 
@@ -1603,10 +1633,16 @@ $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput
 $("#btnUpload").onclick = () => openUpload();
 // Kéo thả tệp vào khung thư mục đang mở → mở hộp tải lên với đúng thư mục
 document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!canUp() || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
-document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); document.querySelectorAll(".sort-over").forEach(x => x.classList.remove("sort-over")); dragItem = null; });
-document.addEventListener("dragover", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
+document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); clearDropMarks(); dragItem = null; });
+document.addEventListener("dragover", e => {
+  const dt = dropTarget(e);
+  if (dt) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dt.el.classList.contains("drop-into")) { clearDropMarks(); dt.el.classList.add("drop-into"); } return; }
+  document.querySelectorAll(".drop-into").forEach(x => x.classList.remove("drop-into"));
+  const row = e.target.closest && e.target.closest("[data-sort-id]"); if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
 document.addEventListener("dragleave", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("drag"); });
 document.addEventListener("drop", async e => {
+  const dt = dropTarget(e);
+  if (dt) { e.preventDefault(); const it = dragItem; clearDropMarks(); dragItem = null; await doMove(it.sortId, it.sortKind === "folder", dt.fid); return; }
   const row = e.target.closest && e.target.closest("[data-sort-id]");
   if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
     e.preventDefault(); row.classList.remove("sort-over");

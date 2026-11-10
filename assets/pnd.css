@@ -402,3 +402,5 @@ details.more .fld{margin-top:8px}
 .grid2>*{min-width:0}
 .fld select,.fld input,.fld textarea{max-width:100%}
 .main,.box,.panel-form{min-width:0}
+.drop-into{outline:3px solid var(--forest)!important;outline-offset:3px;background:#eef8f1!important;border-radius:5px}
+.catnav .drop-into{background:var(--forest)!important;color:#fff!important}
