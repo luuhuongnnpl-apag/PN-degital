@@ -22,7 +22,7 @@ const FOLDER = "application/vnd.google-apps.folder";
 const ROOT_NAME = "PND - Phúc Nguyên Digital";
 
 /* ---------- Danh mục cố định (khớp tên thư mục cấp 1 trên Drive) ---------- */
-const CATS = [
+const BASE_CATS = [
   { key: "van-ban", name: "Văn bản quy chế", label: ["VĂN BẢN ", "QUY CHẾ"], title: "VĂN BẢN QUY CHẾ", group: true, color: ["#2e5c8a", "#4f86b8"], icon: "doc",
     sub: { "VB - Viên chức, giảng viên": ["Quy chế làm việc", "Quy chế chi tiêu nội bộ", "Quy chế nghiên cứu khoa học"], "VB - Đào tạo, sinh viên": ["Kiểm tra, đánh giá", "Quy chế đào tạo đại học"] } },
   { key: "ctdt", name: "Chương trình đào tạo", label: ["CHƯƠNG TRÌNH ", "ĐÀO TẠO"], title: "CHƯƠNG TRÌNH ĐÀO TẠO", group: true, color: ["#6a3fa0", "#9a73c9"], icon: "cap",
@@ -37,11 +37,27 @@ const CATS = [
   { key: "khac", name: "Tài liệu khác", label: ["TÀI LIỆU KHÁC"], title: "TÀI LIỆU KHÁC", group: false, color: ["#5b6675", "#8a96a6"], icon: "folder", sub: {} },
   { key: "cho", name: "Chờ phân loại", label: ["CHỜ PHÂN LOẠI"], title: "CHỜ PHÂN LOẠI", group: false, color: ["#8a6d1f", "#c29a35"], icon: "inbox", sub: {}, adminOnly: true }
 ];
-const CAT = Object.fromEntries(CATS.map(c => [c.key, c]));
-const PUBLIC_CATS = CATS.filter(c => !c.adminOnly);
+/* Bộ sưu tập (danh mục cấp 1): bộ mặc định + bộ do quản trị thêm, đổi tên, sắp xếp (pnd_settings/root.catDefs) */
+let CATS = BASE_CATS.slice(), CAT = {}, PUBLIC_CATS = [];
+const CAT_COLORS = [["#2e5c8a", "#4f86b8"], ["#6a3fa0", "#9a73c9"], ["#1f7a6d", "#46a798"], ["#a5402d", "#d36d52"], ["#24527a", "#3d8bbd"], ["#2f7d32", "#66a95a"], ["#b23a5a", "#dc6d8a"], ["#5b6675", "#8a96a6"], ["#8a6d1f", "#c29a35"], ["#0f6b7a", "#3aa0b0"], ["#7a3b16", "#b8693a"], ["#3a3f8f", "#6b70c9"]];
+function applyCatDefs() {
+  const defs = (settings && settings.catDefs) || {}, roots = (settings && settings.cats) || {};
+  const list = BASE_CATS.map((c, i) => {
+    const d = defs[c.key] || {};
+    const name = d.name || c.name;
+    return { ...c, name, title: d.name ? name.toUpperCase() : c.title, label: d.name ? [name.toUpperCase()] : c.label, color: d.color || c.color, icon: d.icon || c.icon, order: Number.isFinite(d.order) ? d.order : i, removed: !!d.removed };
+  });
+  for (const [k, d] of Object.entries(defs)) if (!BASE_CATS.some(c => c.key === k) && !d.removed && roots[k])
+    list.push({ key: k, name: d.name, title: d.name.toUpperCase(), label: [d.name.toUpperCase()], group: false, color: d.color || CAT_COLORS[7], icon: d.icon || "folder", sub: {}, custom: true, order: Number.isFinite(d.order) ? d.order : 50 });
+  list.sort((a, b) => (a.key === "cho") - (b.key === "cho") || a.order - b.order);
+  CATS = list.filter(c => !c.removed && (!settings || roots[c.key] || c.key === "cho"));
+  CAT = Object.fromEntries(list.map(c => [c.key, c]));
+  PUBLIC_CATS = CATS.filter(c => !c.adminOnly);
+}
 
 /* ---------- Trạng thái ---------- */
 let settings = null;        // {rootId, cats:{key:folderId}}
+applyCatDefs();
 let tree = {};              // folderId -> {id,name,parent,cat,depth}
 let items = {};             // fileId -> item
 let thongDung = [];         // [{id,name,cat,parent}]
@@ -74,6 +90,7 @@ function ask(msg, opt = {}) {
     $("#cfMsg").textContent = msg;
     $("#cfInputWrap").hidden = !opt.input; $("#cfInput").value = opt.value || ""; $("#cfInputLbl").textContent = opt.input || "";
     const sel = $("#cfSelect"); sel.hidden = !opt.options; if (opt.options) sel.innerHTML = opt.options;
+    const ex = $("#cfExtra"); ex.innerHTML = ""; if (opt.node) ex.appendChild(opt.node);
     $("#cfYes").textContent = opt.ok || "Đồng ý";
     const done = v => { d.close(); $("#cfYes").onclick = $("#cfNo").onclick = null; res(v); };
     $("#cfYes").onclick = () => done(opt.input ? $("#cfInput").value.trim() : opt.options ? sel.value : true);
@@ -128,7 +145,16 @@ function canCat(key) {
   return cs.includes("*") || cs.includes(key);
 }
 const levelOf = f => f.access || DEFAULT_LEVEL;
-function canSee(f) { return isAdmin || (canCat(f.cat) && f.cat !== "cho" && myRole().levels.includes(levelOf(f))); }
+function canSee(f) { return isAdmin || (!f.locked && canCat(f.cat) && f.cat !== "cho" && myRole().levels.includes(levelOf(f))); }
+/* Ai cũng thấy tên tài liệu (trừ Mật, Chờ phân loại); mở xem được hay không theo quyền (canSee) */
+const canBrowse = key => isAdmin || !(CAT[key] && CAT[key].adminOnly);
+function canList(f) { return isAdmin || (canBrowse(f.cat) && f.cat !== "cho" && levelOf(f) !== "mat"); }
+function lockReason(f) {
+  const lv = LV[levelOf(f)].name, g = myGrant();
+  if (!g) return "Tài liệu mức " + lv + ": cần đăng nhập bằng tài khoản hoặc mã truy cập được cấp quyền để xem.";
+  if (!canCat(f.cat)) return "Tài khoản của bạn chưa được cấp quyền danh mục “" + (CAT[f.cat] ? CAT[f.cat].name : f.cat) + "”. Liên hệ quản trị viên để được mở quyền.";
+  return "Tài liệu mức " + lv + ": quyền “" + myRole().name + "” của bạn chưa được xem. Liên hệ quản trị viên để được nâng quyền.";
+}
 /* Mức truy cập mặc định của thư mục: lấy theo thư mục gần nhất có đặt, không có thì Nội bộ */
 function folderLevel(id, t) { t = t || tree; let n = t[id], g = 0; while (n && g++ < 30) { if (n.access) return n.access; n = t[n.parent]; } return DEFAULT_LEVEL; }
 const lvChip = (k, extra) => `<span class="lv-chip lv-${esc(k)}">${esc((LV[k] || LV[DEFAULT_LEVEL]).name)}${extra || ""}</span>`;
@@ -164,7 +190,7 @@ function driveIdFrom(s) {
   const m = s.match(/(?:drive|docs)\.google\.com\/.*?(?:\/d\/|folders\/|[?&]id=)([\w-]{20,})/) || s.match(/^([\w-]{25,})$/);
   return m ? m[1] : "";
 }
-function driveIdOf(f) { return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
+function driveIdOf(f) { if (f.locked) return ""; return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
 function fmtOf(f) {
   const m = String(f.fmime || f.mime || ""), ext = (String(f.name || "").toLowerCase().match(/\.([a-z0-9]{2,5})$/) || [])[1] || "";
   if (m === "application/pdf" || ext === "pdf") return "pdf";
@@ -183,17 +209,53 @@ function bookHTML(f) {
   const cat = CAT[f.cat] || CAT.khac, k = fmtOf(f), id = driveIdOf(f);
   const thumb = f.coverUrl || (id && f.shared !== false ? "https://drive.google.com/thumbnail?id=" + encodeURIComponent(id) + "&sz=w400" : "");
   const lv = levelOf(f);
-  return `<div class="book">${lv !== "cong-khai" ? `<span class="badge-lv lv-${lv}">${LV[lv] ? LV[lv].name : ""}</span>` : ""}<span class="spine" style="background:${cat.color[0]}"></span><img class="bl" src="./assets/logo.png" alt=""><span class="bc">${esc(cat.name)}</span>${thumb ? `<img class="real" src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="badge-ft ${k}">${FMT[k][1]}</span></div>`;
+  return `<div class="book${f.locked ? " is-locked" : ""}">${f.locked ? '<span class="lock-ic" aria-label="Chưa được mở">🔒</span>' : ""}${lv !== "cong-khai" ? `<span class="badge-lv lv-${lv}">${LV[lv] ? LV[lv].name : ""}</span>` : ""}<span class="spine" style="background:${cat.color[0]}"></span><img class="bl" src="./assets/logo.png" alt=""><span class="bc">${esc(cat.name)}</span>${thumb ? `<img class="real" src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="badge-ft ${k}">${FMT[k][1]}</span></div>`;
 }
 
 /* ---------- Tải dữ liệu ---------- */
 async function loadSettings() {
   try { const s = await getDoc(doc(db, "pnd_settings", "root")); settings = s.exists() ? s.data() : null; } catch (e) { settings = null; }
+  applyCatDefs();
   try { const s = await getDoc(doc(db, "pnd_settings", "thongdung")); thongDung = s.exists() ? (s.data().items || []) : []; } catch (e) { thongDung = []; }
 }
 async function loadTree() {
   try { const snap = await getDocs(collection(db, "pnd_tree")); tree = {}; snap.forEach(d => tree[d.id] = d.data()); } catch (e) { console.warn("tree", e); }
   loaded.tree = true;
+}
+let catalog = {};   // pnd_catalog: danh mục công khai (tên, thông tin ban hành) của mọi tài liệu trừ Mật — không có đường link
+const CATALOG_FIELDS = ["name", "cat", "parent", "access", "number", "issuer", "issued", "effective", "status", "star", "order", "fmime", "mime", "size", "modified", "added", "coverUrl"];
+function catalogEntry(f) { const o = {}; for (const k of CATALOG_FIELDS) if (f[k] !== undefined && f[k] !== null && f[k] !== "") o[k] = f[k]; if (o.mime && o.mime !== "link") o.mime = "file"; return o; }
+async function loadCatalog() {
+  catalog = {};
+  try {
+    const q = isAdmin ? collection(db, "pnd_catalog") : query(collection(db, "pnd_catalog"), where("access", "in", L3));
+    (await getDocs(q)).forEach(d => catalog[d.id] = d.data());
+  } catch (e) { console.warn("danh mục công khai", e.message); }
+  if (!isAdmin) for (const [id, c] of Object.entries(catalog)) if (!items[id]) items[id] = { ...c, id, locked: true };
+}
+/* Người quản lý: đồng bộ pnd_catalog theo các tài liệu mình xem được (chỉ ghi phần thay đổi) */
+let catSyncT = null;
+function scheduleCatalogSync() { if (!canUp() || !loaded.items) return; clearTimeout(catSyncT); catSyncT = setTimeout(syncCatalog, 1500); }
+async function syncCatalog() {
+  if (!canUp()) return;
+  const ops = [], want = {};
+  for (const f of Object.values(items)) {
+    if (f.locked || !f.access || f.cat === "cho" || levelOf(f) === "mat" || !CAT[f.cat] || !tree[f.parent]) continue;
+    want[f.id] = catalogEntry(f);
+  }
+  for (const [id, e] of Object.entries(want)) if (JSON.stringify(catalog[id] || null) !== JSON.stringify(e)) ops.push({ type: "set", ref: doc(db, "pnd_catalog", id), data: e });
+  const lv = myRole().levels, g = myGrant() || {}, cs = g.cats || ["*"];
+  for (const [id, c] of Object.entries(catalog)) {
+    if (want[id]) continue;
+    const mine = isAdmin || ((cs.includes("*") || cs.includes(c.cat)) && lv.includes(c.access || DEFAULT_LEVEL));
+    if (mine) ops.push({ type: "del", ref: doc(db, "pnd_catalog", id) });
+  }
+  if (!ops.length) return;
+  try {
+    await commitOps(ops);
+    for (const o of ops) { const id = o.ref.id || o.ref.path.split("/").pop(); if (o.type === "del") delete catalog[id]; else catalog[id] = o.data; }
+    console.info("Đã đồng bộ danh mục công khai: " + ops.length + " thay đổi.");
+  } catch (e) { console.warn("đồng bộ danh mục công khai", e.message); }
 }
 async function loadItems() {
   items = {};
@@ -218,13 +280,14 @@ async function loadItems() {
     }
   }
   loadItems.retried = false;
+  await loadCatalog();
   loaded.items = true;
 }
 
 /* ---------- Cây thư mục ---------- */
 const catRootId = key => settings && settings.cats ? settings.cats[key] : null;
 const childrenOf = id => Object.values(tree).filter(n => n.parent === id);
-const filesOf = id => Object.values(items).filter(f => f.parent === id);
+const filesOf = id => Object.values(items).filter(f => f.parent === id && canList(f));
 function sortBySavedOrder(list, fallback) {
   if (list.some(x => Number.isFinite(x.order))) return list.sort((a, b) =>
     (Number.isFinite(a.order) ? a.order : 1e9) - (Number.isFinite(b.order) ? b.order : 1e9) || fallback(a, b));
@@ -248,18 +311,18 @@ async function saveOrder(kind, parent, ids) {
 }
 let dragItem = null;
 function pathOf(id) { const out = []; let n = tree[id], guard = 0; while (n && guard++ < 20) { out.unshift(n); n = tree[n.parent]; } return out; }
-function countFiles(id) { let n = filesOf(id).length; for (const c of childrenOf(id)) n += countFiles(c.id); return n; }
+function countFiles(id) { let n = filesOf(id).filter(canList).length; for (const c of childrenOf(id)) n += countFiles(c.id); return n; }
 
 /* ---------- Giao diện chung ---------- */
 function orderedKids(id) {
   const n = tree[id], cat = n && CAT[n.cat], kids = sortFolders(childrenOf(id));
-  if (n && n.depth <= 1 && cat && cat.group) {
+  if (n && n.depth <= 1 && cat && cat.group && !kids.some(k => Number.isFinite(k.order))) {
     const order = Object.keys(cat.sub || {});
     kids.sort((a, b) => { const ia = order.indexOf(a.name), ib = order.indexOf(b.name); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || vi.compare(a.name, b.name); });
   }
   return kids;
 }
-function catCount(key) { const r = catRootId(key); return loaded.items && canCat(key) && r && tree[r] ? countFiles(r) : null; }
+function catCount(key) { const r = catRootId(key); return loaded.items && canBrowse(key) && r && tree[r] ? countFiles(r) : null; }
 function renderNav() {
   const cur = currentCatKey(), h = decodeURIComponent(location.hash.slice(1));
   const curPath = h.startsWith("f/") ? pathOf(h.slice(2)).map(p => p.id) : [];
@@ -268,21 +331,23 @@ function renderNav() {
     const n = catCount(c.key);
     html += `<button type="button" class="cat${cur === c.key ? " on" : ""}" data-cat="${c.key}"><span class="dot" style="background:${c.color[0]}"></span><span class="nm">${esc(c.name)}</span>${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
     const r = catRootId(c.key);
-    if (cur === c.key && canCat(c.key) && r) {
+    if (cur === c.key && canBrowse(c.key) && r) {
       const kids = orderedKids(r);
       if (kids.length) html += `<div class="subnav">${kids.map(k => `<button type="button" class="sub${curPath.includes(k.id) ? " on" : ""}" data-folder="${esc(k.id)}"><span>${esc(k.name)}</span>${loaded.items ? `<span class="n">${countFiles(k.id)}</span>` : ""}</button>`).join("")}</div>`;
     }
   }
+  if (isAdmin) html += `<button type="button" class="cat add" data-go="thu-muc/them-bst"><span class="nm">＋ Thêm bộ sưu tập</span></button>`;
   $("#catNav").innerHTML = html;
   renderSide();
 }
 function renderSide() {
-  const mine = Object.values(items).filter(f => canSee(f) && f.cat !== "cho");
+  const mine = Object.values(items).filter(f => canSee(f) && f.cat !== "cho"), listed = Object.values(items).filter(f => canList(f) && f.cat !== "cho");
   const rows = [], g = myGrant(), r = myRole();
   rows.push(["Quyền của bạn", r.name]);
   if (g) {
-    rows.push(["Tài liệu được xem", loaded.items ? mine.length : "…"]);
-    rows.push(["Số thư mục", Object.values(tree).filter(n => n.depth >= 2 && n.cat !== "cho" && canCat(n.cat)).length]);
+    rows.push(["Tài liệu trong thư viện", loaded.items ? listed.length : "…"]);
+    rows.push(["Tài liệu bạn mở được", loaded.items ? mine.length : "…"]);
+    rows.push(["Số thư mục", Object.values(tree).filter(n => n.depth >= 2 && n.cat !== "cho" && canBrowse(n.cat)).length]);
     const cs = g.cats || ["*"];
     rows.push(["Danh mục được xem", cs.includes("*") ? PUBLIC_CATS.length : cs.filter(k => CAT[k]).length]);
     rows.push(["Mức được xem", r.levels.map(k => LV[k].name).join(", ")]);
@@ -293,7 +358,7 @@ function renderSide() {
       const cho = Object.values(items).filter(f => f.cat === "cho").length;
       if (cho) rows.push(["Chờ phân loại", cho]);
     }
-  } else rows.push(["Tài liệu Công khai", loaded.items ? mine.length : "…"], ["Danh mục thư viện", PUBLIC_CATS.length]);
+  } else rows.push(["Tài liệu trong thư viện", loaded.items ? listed.length : "…"], ["Tài liệu Công khai", loaded.items ? mine.length : "…"], ["Bộ sưu tập", PUBLIC_CATS.length]);
   $("#stats").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join("") +
     (!g ? `<dd class="muted" style="grid-column:1/-1;text-align:left;font-weight:400;margin-top:4px">Đang xem tài liệu Công khai. Đăng nhập để xem thêm tài liệu Nội bộ, Hạn chế. <button type="button" class="linkish" data-login>Đăng nhập</button></dd>` : "");
   const L = CFG.LINKS || {};
@@ -324,6 +389,7 @@ function currentCatKey() {
 function navRow() { return `<div class="nav-row"><button type="button" class="pill" data-back>QUAY LẠI</button><button type="button" class="pill" data-home>TRANG CHỦ</button></div>`; }
 
 function route() {
+  scheduleCatalogSync();
   const h = decodeURIComponent(location.hash.slice(1));
   const home = !h;
   $("#layout").classList.toggle("no-tools", !home);
@@ -333,7 +399,7 @@ function route() {
   if (h.startsWith("f/")) return renderFolder(h.slice(2));
   if (h.startsWith("tim/")) return renderSearch(h.slice(4));
   if (h === "tai-khoan") return renderAccounts();
-  if (h === "thu-muc") return renderFolders();
+  if (h === "thu-muc" || h === "thu-muc/them-bst") return renderFolders();
   location.hash = "";
 }
 const go = h => { if (location.hash.slice(1) === h) route(); else location.hash = h; };
@@ -341,7 +407,7 @@ const go = h => { if (location.hash.slice(1) === h) route(); else location.hash 
 /* ---------- Trang chủ ---------- */
 function renderHome() {
   const stars = thongDung.filter(s => isAdmin || !CAT[s.cat] || !CAT[s.cat].adminOnly);
-  const starDocs = stars.map(s => items[s.id]).filter(f => f && canSee(f));
+  const starDocs = stars.map(s => items[s.id]).filter(f => f && canList(f));
   const starHTML = starDocs.length
     ? `<div class="docs-grid">${starDocs.map(f => docCardHTML(f, true)).join("")}</div>`
     : stars.length
@@ -352,7 +418,7 @@ function renderHome() {
     return `<div class="card-wrap"><button type="button" class="card" data-cat="${c.key}"><span class="cv">${cover(c.icon, c.color)}</span><span class="nm">${esc(c.name)}</span></button></div>`;
   }).join("");
   const recent = loaded.items
-    ? Object.values(items).filter(f => canSee(f) && f.cat !== "cho").sort((a, b) => String(b.added || b.modified || "").localeCompare(String(a.added || a.modified || ""))).slice(0, 10)
+    ? Object.values(items).filter(f => canList(f) && f.cat !== "cho").sort((a, b) => String(b.added || b.modified || "").localeCompare(String(a.added || a.modified || ""))).slice(0, 10)
     : [];
   $("#main").innerHTML = `
     <section class="box"><h2 class="box-title">Thông dụng ★</h2>${starHTML}</section>
@@ -362,7 +428,7 @@ function renderHome() {
 
 /* ---------- Trang danh mục & thư mục ---------- */
 function requireAccess(key) {
-  if (canCat(key)) return true;
+  if (canBrowse(key)) return true;
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(CAT[key] ? CAT[key].title : "")}</h2>
     <p class="empty">Tài khoản của bạn chưa được cấp quyền xem danh mục <b>${esc(CAT[key] ? CAT[key].name : key)}</b>. Liên hệ quản trị viên để được mở quyền.</p>${navRow()}</section>`;
   return false;
@@ -371,7 +437,7 @@ function folderTools(id) {
   return canUp() && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
 }
 function cardHTML(n, cat) {
-  const cnt = loaded.items && canCat(cat.key) ? countFiles(n.id) : null;
+  const cnt = null;
   const y = yearOf(n.name);
   const real = tree[n.id] && tree[n.id].name === n.name;
   return `<div class="card-wrap" draggable="${canUp() ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}</span></button>${real ? folderTools(n.id) : ""}</div>`;
@@ -473,7 +539,7 @@ function applyFilt(list) {
   else out = sortFiles(out);
   return out;
 }
-const sortAttrs = (f, noSort) => `draggable="${canUp() && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
+const sortAttrs = (f, noSort) => `draggable="${canUp() && !f.locked && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
 function metaLine(f) {
   const y = yearOfItem(f), p = [];
   if (f.number) p.push(`<span>${esc(f.number)}</span>`); else if (y) p.push(`<span>Năm ${y}</span>`);
@@ -481,18 +547,18 @@ function metaLine(f) {
   return p.join("");
 }
 function admBtns(f) {
-  if (!canUp()) return "";
+  if (!canUp() || f.locked) return "";
   return `<div class="doc-adm"><button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button></div>` +
     (driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
 }
 function docCardHTML(f, noSort) {
-  return `<article class="doc-card" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết</button>${admBtns(f)}</article>`;
+  return `<article class="doc-card${f.locked ? " locked" : ""}" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : "Chi tiết"}</button>${admBtns(f)}</article>`;
 }
 function rowHTML(f, withPath) {
   const notes = noteHTML(f), k = fmtOf(f);
   return `<div class="doc-row" ${sortAttrs(f)}><div class="doc-cover" data-doc="${esc(f.id)}">${bookHTML(f)}</div>
     <div><h4 data-doc="${esc(f.id)}">${f.star ? "★ " : ""}${esc(f.name)}</h4><div class="doc-meta"><span>${FMT[k][0]}${f.size ? " · " + fmtSize(f.size) : ""}</span>${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div>${notes ? `<p class="doc-note">${notes}</p>` : ""}${withPath ? `<div class="doc-path"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></div>` : ""}</div>
-    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết &amp; Xem</button>${f.link && (canDl() || !driveIdOf(f)) ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">${driveIdOf(f) ? "Mở tệp" : "Mở liên kết"}</a>` : ""}${admBtns(f)}</div></div>`;
+    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : "Chi tiết &amp; Xem"}</button>${f.link && (canDl() || !driveIdOf(f)) ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">${driveIdOf(f) ? "Mở tệp" : "Mở liên kết"}</a>` : ""}${admBtns(f)}</div></div>`;
 }
 function tableHTML(files, withPath) {
   const years = [...new Set(files.map(yearOfItem).filter(Boolean))].sort((a, b) => b - a);
@@ -520,7 +586,9 @@ function openDoc(id) {
   const f = items[id]; if (!f) return;
   const did = driveIdOf(f), k = fmtOf(f);
   $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
-  $("#docPreview").innerHTML = did
+  $("#docPreview").innerHTML = f.locked
+    ? `<div class="pv-card"><div style="font-size:34px">🔒</div><h4>Bạn chưa được mở tài liệu này</h4><p class="muted">${esc(lockReason(f))}</p>${myGrant() ? "" : '<button type="button" class="btn primary" data-login>Đăng nhập</button>'}</div>`
+    : did
     ? `<iframe src="https://drive.google.com/file/d/${encodeURIComponent(did)}/preview" allow="autoplay" title="Xem trước tài liệu"></iframe>${canDl() ? "" : '<span class="pv-shield" title="Tài khoản chỉ được xem, không tải về"></span>'}`
     : f.link && /^https?:\/\//.test(f.link)
       ? `<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
@@ -528,6 +596,7 @@ function openDoc(id) {
   const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Mức truy cập", LV[levelOf(f)].name], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
   $("#docInfo").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${a === "Tình trạng" ? `<span class="st-chip ${stCls(b)}">${esc(b)}</span>` : a === "Mức truy cập" ? lvChip(levelOf(f)) : esc(b)}</dd>`).join("");
   const acts = [];
+  if (f.locked) { $("#docActs").innerHTML = ""; $("#dlgDoc").showModal(); return; }
   if (f.link && (!did || canDl())) acts.push(`<a class="btn primary" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
   if (did && !canDl()) acts.push(`<p class="muted" style="margin:0">Quyền của bạn: chỉ xem trực tuyến, không tải về.</p>`);
   if (did && canDl() && !/google-apps/.test(f.fmime || f.mime)) acts.push(`<a class="btn" href="https://drive.google.com/uc?export=download&id=${encodeURIComponent(did)}" target="_blank" rel="noopener">Tải về máy</a>`);
@@ -545,7 +614,7 @@ async function renderSearch(q) {
   if (!q) { go(""); return; }
   const fq = fold(q).split(/\s+/).filter(Boolean);
   const hit = f => { const hay = fold([f.name, f.issuer, f.number, f.status, f.note, pathOf(f.parent).map(p => p.name).join(" ")].join(" ")); return fq.every(w => hay.includes(w)); };
-  let res = Object.values(items).filter(f => canSee(f) && hit(f)).map(f => ({ ...f, hit: false }));
+  let res = Object.values(items).filter(f => canList(f) && hit(f)).map(f => ({ ...f, hit: false }));
   const draw = (extra) => {
     $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2><div class="crumbs">“${esc(q)}” · ${res.length} tài liệu${extra || ""}</div>${res.length ? tableHTML(sortFiles(res), true) : '<p class="empty">Không tìm thấy tài liệu phù hợp.</p>'}${navRow()}</section>`;
   };
@@ -783,7 +852,7 @@ async function initTree() {
     const existing = await listChildren(root.id);
     const byName = n => existing.find(f => f.mimeType === FOLDER && f.name === n);
     const cats = {};
-    for (const c of CATS) {
+    for (const c of BASE_CATS) {
       const f = byName(c.name) || await createFolder(c.name, root.id);
       cats[c.key] = f.id;
       const sub = await listChildren(f.id);
@@ -793,7 +862,7 @@ async function initTree() {
         for (const k of cards) if (!sub2.find(x => x.mimeType === FOLDER && x.name === k)) await createFolder(k, gf.id);
       }
     }
-    settings = { rootId: root.id, cats, created: new Date().toISOString() };
+    settings = { rootId: root.id, cats, created: new Date().toISOString() }; applyCatDefs();
     await setDoc(doc(db, "pnd_settings", "root"), settings);
     await logAct("INIT", root.id);
     toast("Đã tạo cây thư mục trên Drive. Đang quét…", "ok");
@@ -1039,7 +1108,12 @@ function dropTarget(e) {
   if (!cur || cur.parent === fid || (isF && subtreeIds(dragItem.sortId).includes(fid))) return null;
   return { fid, el };
 }
-const clearDropMarks = () => document.querySelectorAll(".drop-into,.sort-over").forEach(x => x.classList.remove("drop-into", "sort-over"));
+const clearDropMarks = () => document.querySelectorAll(".drop-into,.sort-over,.sort-before,.sort-after").forEach(x => x.classList.remove("drop-into", "sort-over", "sort-before", "sort-after"));
+/* Thả vào nửa sau của thẻ (bên phải ở dạng lưới, nửa dưới ở dạng danh sách) thì chèn sau thẻ đó */
+function dropAfter(row, e) {
+  const r = row.getBoundingClientRect();
+  return row.classList.contains("doc-row") ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+}
 
 function setBusy(sel, on, label) { const b = $(sel); if (b) { b.disabled = on; b.textContent = label; } }
 
@@ -1461,6 +1535,79 @@ async function renderAccounts() {
   list();
 }
 
+/* ---------- Bộ sưu tập (danh mục cấp 1) ---------- */
+const ICON_NAMES = { doc: "Văn bản", cap: "Mũ tốt nghiệp", book: "Sách mở", board: "Bảng giảng", flask: "Nghiên cứu", run: "Thể thao", heart: "Sức khỏe", folder: "Thư mục", lib: "Thư viện", cal: "Lịch", mail: "Thư", cloud: "Đám mây", key: "Chìa khóa" };
+const slugKey = n => "bst-" + fold(n).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
+async function saveCatDefs(extra) {
+  const catDefs = { ...(settings.catDefs || {}) }, cats = { ...settings.cats };
+  if (extra) extra(catDefs, cats);
+  await setDoc(doc(db, "pnd_settings", "root"), { catDefs, cats }, { merge: true });
+  settings.catDefs = catDefs; settings.cats = cats; applyCatDefs();
+}
+function iconColorForm(icon, colorIdx) {
+  return `<div class="grid2"><label class="fld"><span>Biểu tượng</span><select id="bsIcon">${Object.entries(ICON_NAMES).map(([k, v]) => `<option value="${k}"${k === icon ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+    <div class="fld"><span>Màu</span><div class="swatches" id="bsColor">${CAT_COLORS.map((c, i) => `<button type="button" class="sw${i === colorIdx ? " on" : ""}" data-sw="${i}" style="background:linear-gradient(135deg,${c[0]},${c[1]})" aria-label="Màu ${i + 1}"></button>`).join("")}</div></div></div>`;
+}
+const colorIdxOf = c => Math.max(0, CAT_COLORS.findIndex(x => x[0] === (c && c[0])));
+async function addCollection() {
+  if (!isAdmin) { toast("Chỉ quản trị viên được thêm bộ sưu tập.", "err"); return; }
+  if (!settings) { toast("Chưa có cây thư mục.", "err"); return; }
+  const name = (($("#bsName") || {}).value || "").trim();
+  if (!name) { $("#bsErr").textContent = "Nhập tên bộ sưu tập."; return; }
+  if (CATS.some(c => fold(c.name) === fold(name))) { $("#bsErr").textContent = "Đã có bộ sưu tập cùng tên."; return; }
+  let key = slugKey(name), i = 2; while (CAT[key] || (settings.cats || {})[key]) key = slugKey(name) + "-" + i++;
+  const icon = $("#bsIcon").value, color = CAT_COLORS[+(($("#bsColor .sw.on") || {}).dataset || {}).sw || 0];
+  $("#bsGo").disabled = true; $("#bsErr").textContent = "";
+  try {
+    const f = await createFolder(name, settings.rootId);
+    const order = Math.max(0, ...CATS.filter(c => c.key !== "cho").map(c => c.order)) + 1;
+    await saveCatDefs((defs, cats) => { defs[key] = { name, icon, color, order, created: new Date().toISOString() }; cats[key] = f.id; });
+    const node = { id: f.id, name, parent: settings.rootId, cat: key, depth: 1 };
+    await setDoc(doc(db, "pnd_tree", f.id), node); tree[f.id] = node;
+    await logAct("COLLECTION_NEW", name); toast("Đã thêm bộ sưu tập “" + name + "”.", "ok"); route();
+  } catch (x) { $("#bsErr").textContent = "Chưa thêm được: " + x.message; } finally { const b = $("#bsGo"); if (b) b.disabled = false; }
+}
+async function editCollection(key) {
+  const c = CAT[key]; if (!c || !isAdmin) return;
+  const name = await ask("Tên bộ sưu tập “" + c.name + "”.", { title: "ĐỔI TÊN BỘ SƯU TẬP", input: "Tên mới", value: c.name, ok: "Lưu" });
+  if (!name || name === c.name) return;
+  try {
+    const id = catRootId(key);
+    if (id) await drive("https://www.googleapis.com/drive/v3/files/" + id + "?supportsAllDrives=true", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    await saveCatDefs(defs => { defs[key] = { ...(defs[key] || {}), name }; });
+    if (id && tree[id]) { tree[id].name = name; await setDoc(doc(db, "pnd_tree", id), { name }, { merge: true }); }
+    await logAct("COLLECTION_RENAME", c.name + " → " + name); toast("Đã đổi tên.", "ok"); route();
+  } catch (x) { toast("Chưa đổi được tên: " + x.message, "err"); }
+}
+async function styleCollection(key) {
+  const c = CAT[key]; if (!c || !isAdmin) return;
+  const box = document.createElement("div"); box.innerHTML = iconColorForm(c.icon, colorIdxOf(c.color));
+  const ok = await ask("Biểu tượng và màu của bộ sưu tập “" + c.name + "”.", { title: "GIAO DIỆN BỘ SƯU TẬP", node: box, ok: "Lưu" });
+  if (ok === null) return;
+  const icon = box.querySelector("#bsIcon").value, color = CAT_COLORS[+box.querySelector(".sw.on").dataset.sw];
+  try { await saveCatDefs(defs => { defs[key] = { ...(defs[key] || {}), icon, color }; }); toast("Đã lưu.", "ok"); route(); }
+  catch (x) { toast("Chưa lưu được: " + x.message, "err"); }
+}
+async function moveCollection(key, dir) {
+  const list = CATS.filter(c => c.key !== "cho"), i = list.findIndex(c => c.key === key), j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  try { await saveCatDefs(defs => list.forEach((c, n) => { defs[c.key] = { ...(defs[c.key] || {}), order: n }; })); route(); }
+  catch (x) { toast("Chưa lưu được thứ tự: " + x.message, "err"); }
+}
+async function deleteCollection(key) {
+  const c = CAT[key], id = catRootId(key); if (!c || !isAdmin || key === "cho") return;
+  if ((id && (childrenOf(id).length || countFiles(id))) ) { toast("Bộ sưu tập còn thư mục hoặc tài liệu. Hãy chuyển hoặc xóa hết bên trong trước.", "err"); return; }
+  if (!await ask("Xóa bộ sưu tập “" + c.name + "”? Thư mục trên Google Drive được chuyển vào Thùng rác (khôi phục được trong 30 ngày).", { title: "XÓA BỘ SƯU TẬP", ok: "Xóa" })) return;
+  try {
+    if (id) await drive("https://www.googleapis.com/drive/v3/files/" + id + "?supportsAllDrives=true", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }) });
+    await saveCatDefs((defs, cats) => { if (BASE_CATS.some(b => b.key === key)) defs[key] = { ...(defs[key] || {}), removed: true }; else delete defs[key]; delete cats[key]; });
+    if (id) { delete tree[id]; await deleteDoc(doc(db, "pnd_tree", id)); }
+    await logAct("COLLECTION_DEL", c.name); toast("Đã xóa bộ sưu tập “" + c.name + "”.", "ok"); go("thu-muc");
+  } catch (x) { toast("Chưa xóa được: " + x.message, "err"); }
+}
+document.addEventListener("click", e => { const sw = e.target.closest && e.target.closest(".sw[data-sw]"); if (!sw) return; sw.parentNode.querySelectorAll(".sw").forEach(x => x.classList.toggle("on", x === sw)); });
+
 /* ---------- Quản lý thư mục: cây nhiều cấp, mức truy cập mặc định ---------- */
 const lvOpts = (cur, inherit) => (inherit ? `<option value=""${!cur ? " selected" : ""}>Kế thừa thư mục cha</option>` : "") + LEVELS.map(l => `<option value="${l.key}"${l.key === cur ? " selected" : ""}>${esc(l.name)} — ${esc(l.desc)}</option>`).join("");
 function renderFolders() {
@@ -1481,8 +1628,19 @@ function renderFolders() {
     };
     walk(rootId, 0);
   }
+  const bsRows = CATS.filter(c => c.key !== "cho").map((c, i, arr) => `<tr><td><span class="tree-name"><span class="bs-ic">${cover(c.icon, c.color)}</span><a data-cat="${c.key}">${esc(c.name)}</a></span></td><td class="c">${catRootId(c.key) && tree[catRootId(c.key)] ? countFiles(catRootId(c.key)) : 0}</td>
+      <td class="ftbl-act"><button type="button" class="btn sm" data-bsup="${c.key}"${i === 0 ? " disabled" : ""} title="Lên trên">↑</button><button type="button" class="btn sm" data-bsdown="${c.key}"${i === arr.length - 1 ? " disabled" : ""} title="Xuống dưới">↓</button><button type="button" class="btn sm" data-bsren="${c.key}">Đổi tên</button><button type="button" class="btn sm" data-bsstyle="${c.key}">Màu & biểu tượng</button><button type="button" class="btn sm" data-flevel="${esc(catRootId(c.key) || "")}">Quyền</button><button type="button" class="btn sm danger" data-bsdel="${c.key}">Xóa</button></td></tr>`).join("");
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ THƯ MỤC</h2>
     <div class="crumbs"><a data-home>Trang chủ</a><span class="sep">/</span><span>Quản lý thư mục</span></div>
+    ${isAdmin ? `<form id="bsForm" class="panel-form" novalidate>
+      <h3 class="grp-title" style="margin-top:0">Bộ sưu tập (danh mục lớn)</h3>
+      <div class="tbl-wrap"><table class="adm-table ftbl"><thead><tr><th>Bộ sưu tập</th><th class="c">Tài liệu</th><th>Thao tác</th></tr></thead><tbody>${bsRows}</tbody></table></div>
+      <h3 class="grp-title">Thêm bộ sưu tập</h3>
+      <label class="fld"><span>Tên bộ sưu tập *</span><input id="bsName" maxlength="60" placeholder="Ví dụ: Luận án, luận văn"></label>
+      ${iconColorForm("folder", 9)}
+      <p class="err" id="bsErr"></p>
+      <div class="dlg-act"><button type="submit" class="btn primary" id="bsGo">Thêm bộ sưu tập</button></div>
+    </form>` : ""}
     <form id="fnForm" class="panel-form" novalidate>
       <h3 class="grp-title" style="margin-top:0">Thêm thư mục</h3>
       <div class="grid2">
@@ -1498,8 +1656,16 @@ function renderFolders() {
     <div class="tbl-wrap"><table class="adm-table ftbl"><thead><tr><th>Thư mục</th><th>Mức truy cập</th><th>Tài liệu</th><th>Thao tác</th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="4" class="muted">Chưa có cây thư mục.</td></tr>'}</tbody></table></div>
     <p class="muted">Mức truy cập của thư mục là mức mặc định cho tài liệu tải vào thư mục đó và các thư mục con chưa đặt riêng. Khi đổi mức, có thể áp dụng luôn cho các tài liệu đang có bên trong. Thư mục cũng được tạo, đổi tên, chuyển và xóa (vào Thùng rác) trên Google Drive.</p>
     ${navRow()}</section>`;
-  const h = decodeURIComponent(location.hash.slice(1));
-  void h;
+  if (isAdmin) {
+    $("#bsForm").onsubmit = e => { e.preventDefault(); addCollection(); };
+    $("#bsForm").onclick = e => {
+      const b = e.target.closest("[data-bsup],[data-bsdown],[data-bsren],[data-bsstyle],[data-bsdel]"); if (!b) return;
+      const d = b.dataset;
+      if (d.bsup) moveCollection(d.bsup, -1); else if (d.bsdown) moveCollection(d.bsdown, 1);
+      else if (d.bsren) editCollection(d.bsren); else if (d.bsstyle) styleCollection(d.bsstyle); else if (d.bsdel) deleteCollection(d.bsdel);
+    };
+    if (location.hash.includes("them-bst")) setTimeout(() => { $("#bsName").scrollIntoView({ behavior: "smooth", block: "center" }); $("#bsName").focus(); }, 50);
+  }
   $("#fnForm").onsubmit = async e => {
     e.preventDefault();
     const name = $("#fnName").value.trim(), parent = $("#fnParent").value, lv = $("#fnLevel").value, desc = $("#fnDesc").value.trim();
@@ -1599,7 +1765,7 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-home")) { e.preventDefault(); go(""); }
   else if (t.hasAttribute("data-back")) { e.preventDefault(); history.length > 1 ? history.back() : go(""); }
   else if (t.dataset.go) { e.preventDefault(); go(t.dataset.go); }
-  else if (t.hasAttribute("data-login")) openLogin();
+  else if (t.hasAttribute("data-login")) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openLogin(); }
   else if (t.hasAttribute("data-adminlogin")) openLogin("Đăng nhập bằng tài khoản quản trị.");
   else if (t.dataset.edit) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openEdit(t.dataset.edit); }
   else if (t.dataset.move) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); moveTo(t.dataset.move, false); }
@@ -1661,18 +1827,29 @@ document.addEventListener("dragover", e => {
   const dt = dropTarget(e);
   if (dt) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dt.el.classList.contains("drop-into")) { clearDropMarks(); dt.el.classList.add("drop-into"); } return; }
   document.querySelectorAll(".drop-into").forEach(x => x.classList.remove("drop-into"));
-  const row = e.target.closest && e.target.closest("[data-sort-id]"); if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
+  const row = e.target.closest && e.target.closest("[data-sort-id]");
+  if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const after = dropAfter(row, e);
+    document.querySelectorAll(".sort-before,.sort-after").forEach(x => { if (x !== row) x.classList.remove("sort-before", "sort-after"); });
+    row.classList.toggle("sort-after", after); row.classList.toggle("sort-before", !after);
+  } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
 document.addEventListener("dragleave", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("drag"); });
 document.addEventListener("drop", async e => {
   const dt = dropTarget(e);
   if (dt) { e.preventDefault(); const it = dragItem; clearDropMarks(); dragItem = null; await doMove(it.sortId, it.sortKind === "folder", dt.fid); return; }
   const row = e.target.closest && e.target.closest("[data-sort-id]");
   if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
-    e.preventDefault(); row.classList.remove("sort-over");
-    const kind = dragItem.sortKind, parent = dragItem.sortParent, movingId = dragItem.sortId, targetId = row.dataset.sortId;
+    e.preventDefault();
+    const kind = dragItem.sortKind, parent = dragItem.sortParent, movingId = dragItem.sortId, targetId = row.dataset.sortId, after = dropAfter(row, e);
+    clearDropMarks();
     if (movingId !== targetId) {
-      const source = kind === "folder" ? sortFolders(childrenOf(parent)) : sortFiles(filesOf(parent));
-      const ids = source.map(x => x.id).filter(id => id !== movingId); const at = ids.indexOf(targetId); ids.splice(at < 0 ? ids.length : at, 0, movingId);
+      // Thứ tự đang hiển thị trên trang (đã gồm thứ tự lưu trước đó), rồi chèn vào trước/sau thẻ được thả
+      const shown = [...document.querySelectorAll(`[data-sort-kind="${kind}"][data-sort-parent="${CSS.escape(parent)}"]`)].map(x => x.dataset.sortId);
+      const all = (kind === "folder" ? orderedKids(parent) : sortFiles(filesOf(parent))).map(x => x.id);
+      const ids = [...new Set([...shown, ...all])].filter(id => id !== movingId);
+      const at = ids.indexOf(targetId);
+      ids.splice(at < 0 ? ids.length : at + (after ? 1 : 0), 0, movingId);
       try { await saveOrder(kind, parent, ids); toast("Đã cập nhật thứ tự.", "ok"); route(); } catch (x) { toast("Không lưu được thứ tự: " + x.message, "err"); }
     }
     dragItem = null; return;

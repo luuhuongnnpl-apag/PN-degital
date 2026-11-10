@@ -404,3 +404,20 @@ details.more .fld{margin-top:8px}
 .main,.box,.panel-form{min-width:0}
 .drop-into{outline:3px solid var(--forest)!important;outline-offset:3px;background:#eef8f1!important;border-radius:5px}
 .catnav .drop-into{background:var(--forest)!important;color:#fff!important}
+.sort-before{box-shadow:inset 4px 0 0 var(--forest),var(--sh)!important}
+.sort-after{box-shadow:inset -4px 0 0 var(--forest),var(--sh)!important}
+.doc-row.sort-before{box-shadow:inset 0 4px 0 var(--forest),var(--sh)!important}
+.doc-row.sort-after{box-shadow:inset 0 -4px 0 var(--forest),var(--sh)!important}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.sw{width:30px;height:24px;border-radius:4px;border:2px solid transparent;padding:0}
+.sw.on{border-color:var(--ink);box-shadow:0 0 0 2px #fff inset}
+.bs-ic{width:34px;height:26px;border-radius:4px;overflow:hidden;display:inline-block;flex:none}
+.bs-ic svg{width:100%;height:100%;display:block}
+.cat.add{color:var(--forest);font-weight:600;border-top:1px dashed var(--line);border-radius:0 0 4px 4px;margin-top:4px}
+.cat.add:hover{background:var(--forest-l)}
+#cfExtra:empty{display:none}
+.book.is-locked{filter:saturate(.35)}
+.lock-ic{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;z-index:3;background:rgba(255,255,255,.35)}
+.doc-card.locked .btn-detail{background:#64748b}
+.doc-card.locked .btn-detail:hover{background:#475569}
+.doc-card.locked .doc-title{color:#475569}

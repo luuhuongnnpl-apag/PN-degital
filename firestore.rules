@@ -54,6 +54,13 @@ service cloud.firestore {
       allow delete: if isManager();
     }
 
+    // Danh mục công khai: ai cũng thấy tên, thông tin ban hành của tài liệu (trừ Mật); không có đường link
+    match /pnd_catalog/{id} {
+      allow read: if resource.data.get('access', 'noi-bo') != 'mat' || isAdmin();
+      allow write: if isManager() && request.resource.data.get('access', 'noi-bo') != 'mat';
+      allow delete: if isManager();
+    }
+
     // Tài khoản: người dùng đọc hồ sơ của chính mình; quản trị viên quản lý
     match /pnd_accounts/{em} {
       allow get: if signedIn() && (email().lower() == em || isAdmin());
