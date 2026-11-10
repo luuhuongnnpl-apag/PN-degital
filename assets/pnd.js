@@ -311,7 +311,7 @@ function renderAuth() {
   $("#btnLogout").hidden = !user || (user.isAnonymous && !session);
   $("#btnLogin").hidden = !!(isAdmin || (acct && grantOk(acct)));
   $("#btnPw").hidden = !(user && !user.isAnonymous && (user.providerData || []).some(p => p.providerId === "password"));
-  if (!$("#btnScan").disabled) $("#adminNote").textContent = canUp() ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive sẽ tự kết nối lại khi bấm Quét hoặc Tải lên.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
+  if (!$("#btnScan").disabled) $("#adminNote").textContent = canUp() ? (settings ? (driveTok ? "Đã kết nối Drive" + (driveWho && driveWho.email ? " (" + driveWho.email + ")" : "") + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive sẽ tự kết nối lại khi bấm Quét hoặc Tải lên.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
   $("#btnInit").hidden = !!settings || !isAdmin;
   void g;
 }
@@ -647,7 +647,8 @@ async function adminLogin() {
 function gisToken(prompt) {
   return new Promise((res, rej) => {
     if (!(window.google && google.accounts && google.accounts.oauth2) || !CFG.CLIENT_ID) return rej(new Error("gis"));
-    const hint = (user && user.email && !user.email.endsWith("@" + ACCT_DOMAIN) ? user.email : "") || (acct && acct.googleEmail) || (isAdminUser(user) ? ADMINS[0] : "") || "";
+    // Quản trị: luôn dùng tài khoản Google sở hữu thư mục PND; thủ thư: email Google của chính họ
+    const hint = isAdmin ? (CFG.DRIVE_OWNER || ADMINS[0] || "") : (user && user.email && !user.email.endsWith("@" + ACCT_DOMAIN) ? user.email : "") || (acct && acct.googleEmail) || "";
     const c = google.accounts.oauth2.initTokenClient({
       client_id: CFG.CLIENT_ID, scope: DRIVE_SCOPE, prompt, hint, login_hint: hint,
       callback: r => r && r.access_token ? res(r) : rej(new Error((r && r.error) || "token")),
@@ -656,12 +657,31 @@ function gisToken(prompt) {
     c.requestAccessToken({ prompt, hint, login_hint: hint });
   });
 }
+let driveWho = null;   // tài khoản Google đang dùng cho Drive: { email, owner, canEdit }
+/* Kiểm tra quyền Drive vừa cấp có sửa được thư mục gốc PND không (tránh dùng nhầm tài khoản Google) */
+async function checkDriveTok(tk) {
+  const H = { headers: { Authorization: "Bearer " + tk } };
+  const a = await fetch("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)", H).then(r => r.json()).catch(() => ({}));
+  driveWho = { email: a.user && a.user.emailAddress || "", owner: "", canEdit: true };
+  if (!settings || !settings.rootId) return true;
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${settings.rootId}?fields=capabilities(canEdit),owners(emailAddress)&supportsAllDrives=true`, H);
+  const j = await r.json().catch(() => ({}));
+  driveWho.owner = j.owners && j.owners[0] ? j.owners[0].emailAddress : "";
+  driveWho.canEdit = !!(r.ok && j.capabilities && j.capabilities.canEdit);
+  return driveWho.canEdit;
+}
 async function ensureDrive(force) {
   if (driveTok && !force) return driveTok;
   if (!canUp()) throw new Error("Tài khoản của bạn không có quyền thao tác trên Google Drive.");
-  // Xin quyền Drive ngầm (không hỏi lại), không được thì cho chọn tài khoản Google có quyền sửa thư mục PND
-  for (const pr of ["", "select_account"]) { try { const r = await gisToken(pr); saveTok(r.access_token, r.expires_in); return driveTok; } catch (e) { console.warn("quyền Drive", pr || "ngầm", e.message); } }
-  if (isAdminUser(user)) { await adminLogin(); if (driveTok) return driveTok; }
+  // Xin quyền Drive ngầm (không hỏi lại); nếu sai tài khoản thì mở cửa sổ chọn tài khoản Google có quyền sửa thư mục PND
+  let wrong = null;
+  for (const pr of ["", "select_account"]) {
+    let r; try { r = await gisToken(pr); } catch (e) { console.warn("quyền Drive", pr || "ngầm", e.message); continue; }
+    if (await checkDriveTok(r.access_token)) { saveTok(r.access_token, r.expires_in); renderAuth(); return driveTok; }
+    wrong = { ...driveWho };
+  }
+  if (!wrong && isAdminUser(user)) { await adminLogin(); if (driveTok) return driveTok; }
+  if (wrong) throw new Error("Tài khoản Google " + (wrong.email || "vừa chọn") + " không có quyền sửa thư mục PND trên Drive" + (wrong.owner ? " (thư mục thuộc " + wrong.owner + ")" : "") + ". Bấm lại và chọn đúng tài khoản " + (isAdmin ? (CFG.DRIVE_OWNER || wrong.owner) : "được cấp quyền") + ".");
   throw new Error("Chưa kết nối được Google Drive. Hãy cho phép cửa sổ bật lên và chọn tài khoản Google có quyền chỉnh sửa thư mục PND.");
 }
 
@@ -671,6 +691,9 @@ async function drive(url, opt = {}, retried) {
   const r = await fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + tk } });
   if (r.status === 401) { saveTok(null); if (!retried) return drive(url, opt, true); throw new Error("Chưa gia hạn được quyền Drive. Bấm lại để thử lần nữa."); }
   const j = await r.json().catch(() => ({}));
+  // Quyền Drive đang lưu thuộc tài khoản Google không có quyền với tệp: bỏ đi, xin lại đúng tài khoản rồi thử một lần nữa
+  const why = String((j.error && (j.error.errors || [])[0] && j.error.errors[0].reason) || "");
+  if ((r.status === 403 || r.status === 404) && /insufficient|notFound|forbidden/i.test(why) && !retried && !(driveWho && driveWho.canEdit)) { saveTok(null); driveWho = null; return drive(url, opt, true); }
   if (!r.ok) throw new Error((j.error && j.error.message) || "Drive " + r.status);
   return j;
 }
@@ -1699,6 +1722,8 @@ async function afterAuth() {
   }
   await loadItems();
   if (isAdmin) await migrateAccess();
+  // Quyền Drive lưu từ trước có thể thuộc tài khoản Google khác (không sửa được thư mục PND): kiểm tra, sai thì bỏ
+  if (canUp() && driveTok) { try { if (!await checkDriveTok(driveTok)) { saveTok(null); driveWho = null; } } catch (e) {} }
   // Người quản lý: hiện ngay bản đã lưu trên máy, rồi đọc lại Drive
   const who = canUp() ? (isAdmin ? "admin" : "up:" + (user && user.uid)) : null;
   if (who) {

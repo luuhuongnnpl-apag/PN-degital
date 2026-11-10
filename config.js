@@ -17,6 +17,8 @@ window.PND_CONFIG = {
   ADMIN_UID: "smoIpuX7qseqTeu9nToc9RYigku1",
   // Tài khoản Google quản trị (đăng nhập Google để quét Drive, tải lên, cấp mã)
   ADMIN_EMAILS: ["luuhuong.dhnv@gmail.com", "luuhuong.nnpl@gmail.com"],
+  // Tài khoản Google sở hữu thư mục PND trên Drive: quản trị viên thao tác Drive (đổi tên, chuyển, tải lên…) bằng tài khoản này
+  DRIVE_OWNER: "luuhuong.dhnv@gmail.com",
   // Khóa reCAPTCHA (Fraud Defense) công khai cho App Check — bảo vệ Hỏi AI khỏi bị lạm dụng
   APPCHECK_SITE_KEY: "6LdANxAuAAAAAKIjvQ50BAohlCrqbEb_YHFQzOag",
   // Mô hình Gemini dùng cho Hỏi AI
