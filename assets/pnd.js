@@ -9,7 +9,7 @@
     (giống mã lớp của PNL); quy tắc bảo mật Firestore kiểm soát phía máy chủ.
 */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, updatePassword } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch, addDoc, Timestamp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
 const CFG = window.PND_CONFIG || {};
@@ -46,6 +46,7 @@ let tree = {};              // folderId -> {id,name,parent,cat,depth}
 let items = {};             // fileId -> item
 let thongDung = [];         // [{id,name,cat,parent}]
 let user = null, isAdmin = false;
+let acct = null;            // hồ sơ tài khoản (pnd_accounts/{email}) của người đang đăng nhập
 let session = loadSession(); // {code,han,cats}
 let driveTok = loadTok();
 let loaded = { tree: false, items: false };
@@ -60,6 +61,9 @@ const norm = s => String(s || "").toUpperCase().replace(/\s+/g, "").replace(/[�
 const okCode = c => /^[A-Z0-9][A-Z0-9_-]{2,23}$/.test(c);
 const vi = new Intl.Collator("vi", { sensitivity: "base", numeric: true });
 const yearOf = s => { const m = String(s || "").match(/(19|20)\d{2}/g); return m ? +m[m.length - 1] : 0; };
+const ACCT_DOMAIN = "taikhoan.pnd";   // tên đăng nhập không có @ được đổi thành <tên>@taikhoan.pnd cho Firebase
+const toEmail = u => { u = String(u || "").trim().toLowerCase(); return u.includes("@") ? u : u.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9._-]/g, "") + "@" + ACCT_DOMAIN; };
+const showName = e => String(e || "").endsWith("@" + ACCT_DOMAIN) ? String(e).split("@")[0] : String(e || "");
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
 /* Hộp xác nhận / nhập liệu ngay trong trang (trình duyệt nhúng có thể chặn confirm/prompt) */
@@ -87,13 +91,47 @@ function loadTok() { try { const t = JSON.parse(localStorage.getItem("pnd_drive"
 function saveTok(t, sec) { driveTok = t; try { t ? localStorage.setItem("pnd_drive", JSON.stringify({ t, exp: Date.now() + Math.max(300, (sec || 3600) - 300) * 1000 })) : localStorage.removeItem("pnd_drive"); } catch (e) {} }
 function isAdminUser(u) { return !!u && !u.isAnonymous && (u.uid === CFG.ADMIN_UID || (!!u.email && u.emailVerified !== false && ADMINS.includes(u.email.toLowerCase()))); }
 
-/* ---------- Quyền xem ---------- */
+/* ---------- Vai trò & mức truy cập (một hệ thống chung cho tài khoản và mã truy cập) ---------- */
+const LEVELS = [
+  { key: "cong-khai", name: "Công khai", desc: "Ai vào thư viện cũng xem được" },
+  { key: "noi-bo", name: "Nội bộ", desc: "Người có tài khoản hoặc mã truy cập" },
+  { key: "han-che", name: "Hạn chế", desc: "Tài khoản được cấp quyền mở rộng" },
+  { key: "mat", name: "Mật", desc: "Chỉ quản trị viên xem được" }
+];
+const LV = Object.fromEntries(LEVELS.map(l => [l.key, l]));
+const L3 = ["cong-khai", "noi-bo", "han-che"];
+const ROLES = {
+  "xem":        { name: "Độc giả", desc: "Xem tài liệu Công khai và Nội bộ; không tải về", levels: ["cong-khai", "noi-bo"], dl: false, up: false },
+  "xem-rong":   { name: "Độc giả mở rộng", desc: "Xem mọi tài liệu (Công khai, Nội bộ, Hạn chế); không tải về", levels: L3, dl: false, up: false },
+  "chuyen-muc": { name: "Người dùng chuyên mục", desc: "Xem tài liệu (kể cả Hạn chế) trong các danh mục được chọn và được tải về", levels: L3, dl: true, up: false },
+  "bien-muc":   { name: "Thủ thư / Biên mục", desc: "Xem, tải về, tải lên; quản lý thư mục và tài liệu", levels: L3, dl: true, up: true },
+  "quan-tri":   { name: "Quản trị hệ thống", desc: "Toàn quyền: mọi tài liệu kể cả Mật, cấp tài khoản và phân quyền", levels: [...L3, "mat"], dl: true, up: true, admin: true }
+};
+const GUEST = { name: "Khách", desc: "Chưa đăng nhập: xem tài liệu Công khai", levels: ["cong-khai"], dl: false, up: false };
+const DEFAULT_LEVEL = "noi-bo";
+const grantOk = g => !!g && !g.disabled && (!g.han || g.han >= todayISO());
+function myGrant() {
+  if (isAdmin) return { role: "quan-tri", cats: ["*"] };
+  if (acct && grantOk(acct)) return acct;
+  if (session) return { role: session.role || "chuyen-muc", cats: session.cats || ["*"], han: session.han };
+  return null;
+}
+function myRole() { const g = myGrant(); return g ? (ROLES[g.role] || ROLES["chuyen-muc"]) : GUEST; }
+const canDl = () => myRole().dl;
+const canUp = () => myRole().up;
 function canCat(key) {
   if (isAdmin) return true;
   if (CAT[key] && CAT[key].adminOnly) return false;
-  if (!session) return false;
-  return session.cats.includes("*") || session.cats.includes(key);
+  const g = myGrant();
+  if (!g) return true;                       // khách vẫn duyệt danh mục, chỉ thấy tài liệu Công khai
+  const cs = g.cats || ["*"];
+  return cs.includes("*") || cs.includes(key);
 }
+const levelOf = f => f.access || DEFAULT_LEVEL;
+function canSee(f) { return isAdmin || (canCat(f.cat) && f.cat !== "cho" && myRole().levels.includes(levelOf(f))); }
+/* Mức truy cập mặc định của thư mục: lấy theo thư mục gần nhất có đặt, không có thì Nội bộ */
+function folderLevel(id, t) { t = t || tree; let n = t[id], g = 0; while (n && g++ < 30) { if (n.access) return n.access; n = t[n.parent]; } return DEFAULT_LEVEL; }
+const lvChip = (k, extra) => `<span class="lv-chip lv-${esc(k)}">${esc((LV[k] || LV[DEFAULT_LEVEL]).name)}${extra || ""}</span>`;
 function visibleCats() { return isAdmin ? CATS : PUBLIC_CATS; }
 
 /* ---------- Ảnh bìa tự sinh ---------- */
@@ -119,6 +157,35 @@ function cover(icon, colors, label) {
   return `<svg viewBox="0 0 160 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="160" height="120" fill="url(#${id})"/><circle cx="140" cy="16" r="34" fill="#fff" opacity=".08"/><circle cx="14" cy="110" r="26" fill="#fff" opacity=".07"/>${ICONS[icon] || ICONS.folder}${tag}</svg>`;
 }
 
+/* ---------- Định dạng tệp, bìa sách, kích thước ---------- */
+const FMT = { pdf: ["PDF", "PDF"], word: ["Word / Văn bản", "DOC"], excel: ["Excel / Bảng tính", "XLS"], ppt: ["PowerPoint / Trình chiếu", "PPT"], image: ["Hình ảnh", "ẢNH"], media: ["Video / Âm thanh", "MEDIA"], link: ["Liên kết web", "LINK"], khac: ["Tệp khác", "FILE"] };
+function driveIdFrom(s) {
+  s = String(s || "").trim();
+  const m = s.match(/(?:drive|docs)\.google\.com\/.*?(?:\/d\/|folders\/|[?&]id=)([\w-]{20,})/) || s.match(/^([\w-]{25,})$/);
+  return m ? m[1] : "";
+}
+function driveIdOf(f) { return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
+function fmtOf(f) {
+  const m = String(f.fmime || f.mime || ""), ext = (String(f.name || "").toLowerCase().match(/\.([a-z0-9]{2,5})$/) || [])[1] || "";
+  if (m === "application/pdf" || ext === "pdf") return "pdf";
+  if (/wordprocessing|msword|google-apps\.document|opendocument\.text/.test(m) || /^(docx?|odt|rtf)$/.test(ext)) return "word";
+  if (/spreadsheet|ms-excel|google-apps\.spreadsheet|text\/csv/.test(m) || /^(xlsx?|ods|csv)$/.test(ext)) return "excel";
+  if (/presentation|powerpoint|google-apps\.presentation/.test(m) || /^(pptx?|odp)$/.test(ext)) return "ppt";
+  if (/^image\//.test(m) || /^(jpe?g|png|gif|webp|bmp)$/.test(ext)) return "image";
+  if (/^(video|audio)\//.test(m) || /^(mp4|mov|mp3|wav|m4a|avi|mkv)$/.test(ext)) return "media";
+  if (m === "link") return driveIdOf(f) ? "khac" : "link";
+  return "khac";
+}
+const yearOfItem = f => yearOf(f.issued) || yearOf(f.name) || yearOf(f.modified || f.added);
+const fmtSize = n => !n ? "" : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " KB" : (n / 1048576).toFixed(1).replace(".", ",") + " MB";
+const stCls = s => /^Còn/.test(s) ? "on" : /một phần/.test(s) ? "mid" : /Hết/.test(s) ? "off" : "mid";
+function bookHTML(f) {
+  const cat = CAT[f.cat] || CAT.khac, k = fmtOf(f), id = driveIdOf(f);
+  const thumb = f.coverUrl || (id && f.shared !== false ? "https://drive.google.com/thumbnail?id=" + encodeURIComponent(id) + "&sz=w400" : "");
+  const lv = levelOf(f);
+  return `<div class="book">${lv !== "cong-khai" ? `<span class="badge-lv lv-${lv}">${LV[lv] ? LV[lv].name : ""}</span>` : ""}<span class="spine" style="background:${cat.color[0]}"></span><img class="bl" src="./assets/logo.png" alt=""><span class="bc">${esc(cat.name)}</span>${thumb ? `<img class="real" src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="badge-ft ${k}">${FMT[k][1]}</span></div>`;
+}
+
 /* ---------- Tải dữ liệu ---------- */
 async function loadSettings() {
   try { const s = await getDoc(doc(db, "pnd_settings", "root")); settings = s.exists() ? s.data() : null; } catch (e) { settings = null; }
@@ -132,9 +199,15 @@ async function loadItems() {
   items = {};
   try {
     if (isAdmin) { (await getDocs(collection(db, "pnd_items"))).forEach(d => items[d.id] = d.data()); }
-    else if (session) {
-      const keys = session.cats.includes("*") ? PUBLIC_CATS.map(c => c.key) : session.cats.filter(k => CAT[k]);
-      for (const k of keys) (await getDocs(query(collection(db, "pnd_items"), where("cat", "==", k)))).forEach(d => items[d.id] = d.data());
+    else {
+      // Truy vấn đúng phạm vi được phép để Quy tắc bảo mật Firestore chấp nhận
+      const g = myGrant(), lv = myRole().levels;
+      if (!g) (await getDocs(query(collection(db, "pnd_items"), where("access", "==", "cong-khai")))).forEach(d => items[d.id] = d.data());
+      else {
+        const cs = g.cats || ["*"];
+        const keys = cs.includes("*") ? PUBLIC_CATS.map(c => c.key) : cs.filter(k => CAT[k] && !CAT[k].adminOnly);
+        for (const k of keys) (await getDocs(query(collection(db, "pnd_items"), where("cat", "==", k), where("access", "in", lv)))).forEach(d => items[d.id] = d.data());
+      }
     }
   } catch (e) {
     console.warn("items", e);
@@ -178,17 +251,69 @@ function pathOf(id) { const out = []; let n = tree[id], guard = 0; while (n && g
 function countFiles(id) { let n = filesOf(id).length; for (const c of childrenOf(id)) n += countFiles(c.id); return n; }
 
 /* ---------- Giao diện chung ---------- */
+function orderedKids(id) {
+  const n = tree[id], cat = n && CAT[n.cat], kids = sortFolders(childrenOf(id));
+  if (n && n.depth <= 1 && cat && cat.group) {
+    const order = Object.keys(cat.sub || {});
+    kids.sort((a, b) => { const ia = order.indexOf(a.name), ib = order.indexOf(b.name); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || vi.compare(a.name, b.name); });
+  }
+  return kids;
+}
+function catCount(key) { const r = catRootId(key); return loaded.items && canCat(key) && r && tree[r] ? countFiles(r) : null; }
 function renderNav() {
-  const cur = currentCatKey();
-  $("#catNav").innerHTML = visibleCats().map(c => `<button type="button" class="pill${cur === c.key ? " on" : ""}" data-cat="${c.key}">${c.label.length > 1 ? esc(c.label[0]) + '<span class="hl">' + esc(c.label[1]) + "</span>" : esc(c.label[0])}</button>`).join("");
+  const cur = currentCatKey(), h = decodeURIComponent(location.hash.slice(1));
+  const curPath = h.startsWith("f/") ? pathOf(h.slice(2)).map(p => p.id) : [];
+  let html = `<button type="button" class="cat home${!h ? " on" : ""}" data-home><span class="dot" style="background:var(--navy)"></span><span class="nm">Trang chủ</span></button>`;
+  for (const c of visibleCats()) {
+    const n = catCount(c.key);
+    html += `<button type="button" class="cat${cur === c.key ? " on" : ""}" data-cat="${c.key}"><span class="dot" style="background:${c.color[0]}"></span><span class="nm">${esc(c.name)}</span>${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
+    const r = catRootId(c.key);
+    if (cur === c.key && canCat(c.key) && r) {
+      const kids = orderedKids(r);
+      if (kids.length) html += `<div class="subnav">${kids.map(k => `<button type="button" class="sub${curPath.includes(k.id) ? " on" : ""}" data-folder="${esc(k.id)}"><span>${esc(k.name)}</span>${loaded.items ? `<span class="n">${countFiles(k.id)}</span>` : ""}</button>`).join("")}</div>`;
+    }
+  }
+  $("#catNav").innerHTML = html;
+  renderSide();
+}
+function renderSide() {
+  const mine = Object.values(items).filter(f => canSee(f) && f.cat !== "cho");
+  const rows = [], g = myGrant(), r = myRole();
+  rows.push(["Quyền của bạn", r.name]);
+  if (g) {
+    rows.push(["Tài liệu được xem", loaded.items ? mine.length : "…"]);
+    rows.push(["Số thư mục", Object.values(tree).filter(n => n.depth >= 2 && n.cat !== "cho" && canCat(n.cat)).length]);
+    const cs = g.cats || ["*"];
+    rows.push(["Danh mục được xem", cs.includes("*") ? PUBLIC_CATS.length : cs.filter(k => CAT[k]).length]);
+    rows.push(["Mức được xem", r.levels.map(k => LV[k].name).join(", ")]);
+    rows.push(["Tải tài liệu về", r.dl ? "Được phép" : "Không"]);
+    if (isAdmin) {
+      const drv = mine.filter(f => driveIdOf(f));
+      rows.push(["Đã mở chia sẻ xem", drv.filter(f => f.shared !== false).length + "/" + drv.length]);
+      const cho = Object.values(items).filter(f => f.cat === "cho").length;
+      if (cho) rows.push(["Chờ phân loại", cho]);
+    }
+  } else rows.push(["Tài liệu Công khai", loaded.items ? mine.length : "…"], ["Danh mục thư viện", PUBLIC_CATS.length]);
+  $("#stats").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join("") +
+    (!g ? `<dd class="muted" style="grid-column:1/-1;text-align:left;font-weight:400;margin-top:4px">Đang xem tài liệu Công khai. Đăng nhập để xem thêm tài liệu Nội bộ, Hạn chế. <button type="button" class="linkish" data-login>Đăng nhập</button></dd>` : "");
+  const L = CFG.LINKS || {};
+  const lk = (href, icon, colors, label) => href ? `<a href="${esc(href)}" target="_blank" rel="noopener"><span class="ic">${cover(icon, colors)}</span>${esc(label)}</a>` : "";
+  $("#linkList").innerHTML = lk(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library") + lk(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work") +
+    lk(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive") + lk(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail") +
+    (isAdmin ? `<button type="button" data-go="tai-khoan"><span class="ic">${cover("key", ["#0f2945", "#2b5f8f"])}</span>Tài khoản & phân quyền</button>` : "");
 }
 function renderAuth() {
   document.body.classList.toggle("is-admin", isAdmin);
-  $("#whoami").textContent = isAdmin ? "Quản trị: " + user.email : session ? "Mã: " + session.code + " (đến " + fmtDate(session.han) + ")" : "";
-  $("#btnLogout").hidden = !isAdmin && !session;
-  $("#btnLogin").hidden = isAdmin;
-  if (!$("#btnScan").disabled) $("#adminNote").textContent = isAdmin ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive sẽ tự kết nối lại khi bấm Quét hoặc Tải lên.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
-  $("#btnInit").hidden = !!settings;
+  document.body.classList.toggle("can-up", canUp());
+  const g = myGrant(), r = myRole();
+  const who = isAdmin ? (acct && acct.name ? acct.name : user && user.email || "Quản trị") : acct && grantOk(acct) ? (acct.name || acct.username) : session ? "Mã " + session.code : "";
+  $("#whoami").textContent = who ? who + " · " + r.name : "";
+  $("#btnLogout").hidden = !user || (user.isAnonymous && !session);
+  $("#btnLogin").hidden = !!(isAdmin || (acct && grantOk(acct)));
+  $("#btnPw").hidden = !(user && !user.isAnonymous && (user.providerData || []).some(p => p.providerId === "password"));
+  if (!$("#btnScan").disabled) $("#adminNote").textContent = canUp() ? (settings ? (driveTok ? "Đã kết nối Drive" + (settings.lastScan ? " · quét lần cuối " + new Date(settings.lastScan).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "") + "." : "Drive sẽ tự kết nối lại khi bấm Quét hoặc Tải lên.") : "Chưa có cây thư mục: bấm Khởi tạo.") : "";
+  $("#btnInit").hidden = !!settings || !isAdmin;
+  void g;
 }
 function currentCatKey() {
   const h = location.hash.slice(1);
@@ -208,6 +333,7 @@ function route() {
   if (h.startsWith("f/")) return renderFolder(h.slice(2));
   if (h.startsWith("tim/")) return renderSearch(h.slice(4));
   if (h === "tai-khoan") return renderAccounts();
+  if (h === "thu-muc") return renderFolders();
   location.hash = "";
 }
 const go = h => { if (location.hash.slice(1) === h) route(); else location.hash = h; };
@@ -215,45 +341,43 @@ const go = h => { if (location.hash.slice(1) === h) route(); else location.hash 
 /* ---------- Trang chủ ---------- */
 function renderHome() {
   const stars = thongDung.filter(s => isAdmin || !CAT[s.cat] || !CAT[s.cat].adminOnly);
-  const starHTML = stars.length
-    ? `<div class="star-list">${stars.map(s => `<button type="button" class="star-item" data-star="${esc(s.id)}"><span class="st">★</span><span>${esc(s.name)}<small>${esc(CAT[s.cat] ? CAT[s.cat].name : "")}</small></span></button>`).join("")}</div>`
-    : `<p class="empty">Tài liệu được đánh dấu ★ sẽ hiện ở đây.${isAdmin ? " (Đánh dấu khi tải lên hoặc bấm Sửa ở bảng tài liệu.)" : ""}</p>`;
-  const L = CFG.LINKS || {};
-  const tile = (href, icon, colors, label, ext) => `<a class="ltile" href="${esc(href)}"${ext ? ' target="_blank" rel="noopener"' : ""}><span class="lv">${cover(icon, colors)}</span><span>${esc(label)}</span></a>`;
+  const starDocs = stars.map(s => items[s.id]).filter(f => f && canSee(f));
+  const starHTML = starDocs.length
+    ? `<div class="docs-grid">${starDocs.map(f => docCardHTML(f, true)).join("")}</div>`
+    : stars.length
+      ? `<div class="star-list">${stars.map(s => `<button type="button" class="star-item" data-star="${esc(s.id)}"><span class="st">★</span><span>${esc(s.name)}<small>${esc(CAT[s.cat] ? CAT[s.cat].name : "")}</small></span></button>`).join("")}</div>`
+      : `<p class="empty">Tài liệu được đánh dấu ★ sẽ hiện ở đây.${isAdmin ? " (Đánh dấu khi tải lên hoặc bấm Sửa ở tài liệu.)" : ""}</p>`;
+  const catCards = visibleCats().map(c => {
+    const n = catCount(c.key);
+    return `<div class="card-wrap"><button type="button" class="card" data-cat="${c.key}"><span class="cv">${cover(c.icon, c.color)}</span><span class="nm">${esc(c.name)}</span></button></div>`;
+  }).join("");
+  const recent = loaded.items
+    ? Object.values(items).filter(f => canSee(f) && f.cat !== "cho").sort((a, b) => String(b.added || b.modified || "").localeCompare(String(a.added || a.modified || ""))).slice(0, 10)
+    : [];
   $("#main").innerHTML = `
-    <section class="box grow"><h2 class="box-title sm">THÔNG DỤNG</h2>${starHTML}</section>
-    <section class="box">
-      <h4 class="links-title">LIÊN KẾT</h4>
-      <div class="links">
-        ${tile(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library", true)}
-        ${tile(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work", true)}
-        ${tile(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive", true)}
-        ${tile(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail", true)}
-        <button type="button" class="ltile" data-go="tai-khoan"><span class="lv">${cover("key", ["#0f2945", "#2b5f8f"])}</span><span>Quản lý mã tài khoản</span></button>
-      </div>
-    </section>`;
+    <section class="box"><h2 class="box-title">Thông dụng ★</h2>${starHTML}</section>
+    <section class="box"><h2 class="box-title">Danh mục thư viện</h2><div class="cards">${catCards}</div></section>
+    ${recent.length ? `<section class="box"><h2 class="box-title">Mới cập nhật</h2><div class="docs-grid">${recent.map(f => docCardHTML(f, true)).join("")}</div></section>` : ""}`;
 }
 
 /* ---------- Trang danh mục & thư mục ---------- */
 function requireAccess(key) {
   if (canCat(key)) return true;
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(CAT[key] ? CAT[key].title : "")}</h2>
-    <p class="empty">Nội dung này cần mã tài khoản có quyền truy cập danh mục <b>${esc(CAT[key] ? CAT[key].name : key)}</b>.</p>
-    <div style="text-align:center"><button type="button" class="pill" style="width:auto;display:inline-block;padding:10px 24px" data-login>NHẬP MÃ TÀI KHOẢN</button></div>${navRow()}</section>`;
-  if (authReady) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[key] ? CAT[key].name : key) + "”.");
+    <p class="empty">Tài khoản của bạn chưa được cấp quyền xem danh mục <b>${esc(CAT[key] ? CAT[key].name : key)}</b>. Liên hệ quản trị viên để được mở quyền.</p>${navRow()}</section>`;
   return false;
 }
 function folderTools(id) {
-  return isAdmin && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
+  return canUp() && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
 }
 function cardHTML(n, cat) {
   const cnt = loaded.items && canCat(cat.key) ? countFiles(n.id) : null;
   const y = yearOf(n.name);
   const real = tree[n.id] && tree[n.id].name === n.name;
-  return `<div class="card-wrap" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}${cnt != null ? `<span class="ct"><br>${cnt} tài liệu</span>` : ""}</span></button>${real ? folderTools(n.id) : ""}</div>`;
+  return `<div class="card-wrap" draggable="${canUp() ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
-const upBtn = parent => isAdmin ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
-const addBtn = (parent, label) => isAdmin ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
+const upBtn = parent => canUp() ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
+const addBtn = (parent, label) => canUp() ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
 function renderCat(key) {
   const cat = CAT[key]; if (!cat || (cat.adminOnly && !isAdmin)) { go(""); return; }
   if (!requireAccess(key)) return;
@@ -261,6 +385,7 @@ function renderCat(key) {
   if (!rootId) { $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(cat.title)}</h2><p class="empty">Danh mục đang được chuẩn bị.${isAdmin ? " Bấm “Khởi tạo cây thư mục” ở trang chủ." : ""}</p>${navRow()}</section>`; return; }
   renderFolder(rootId, true);
 }
+const guestNote = () => myGrant() ? "" : `<p class="note-bar">Bạn đang xem tài liệu <b>Công khai</b>. <button type="button" class="linkish" data-login>Đăng nhập</button> để xem thêm tài liệu Nội bộ và Hạn chế.</p>`;
 function renderFolder(id, isCatRoot) {
   const node = tree[id];
   if (!node) { $("#main").innerHTML = `<section class="box"><p class="empty">${loaded.tree ? "Không tìm thấy thư mục này (có thể đã đổi tên hoặc chuyển chỗ)." : "Đang tải…"}</p>${navRow()}</section>`; return; }
@@ -277,21 +402,21 @@ function renderFolder(id, isCatRoot) {
       const gk = sortFolders(childrenOf(g.id));
       const own = filesOf(g.id).length;
       const cards = gk.map(n => cardHTML(n, cat)).join("") + (own ? cardHTML({ id: g.id, name: "Tài liệu chung" }, cat) : "");
-      return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || isAdmin ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
-    }).join("") + (isAdmin ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
-  } else if (kids.length || isAdmin) {
+      return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || canUp() ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
+    }).join("") + (canUp() ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
+  } else if (kids.length || canUp()) {
     body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}${addBtn(id, "Thư mục mới")}${node.depth >= 2 ? upBtn(id) : ""}</div>`;
   }
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
-  const crumbs = path.length > 1 ? `<div class="crumbs">${path.map((p, i) => i === path.length - 1 ? esc(p.name) : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`).join(" › ")}</div>` : "";
-  const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
-  $("#main").innerHTML = `<section class="box${isAdmin ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${isAdmin ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
+  const crumbs = `<div class="crumbs"><a data-home>Trang chủ</a>${path.map((p, i) => `<span class="sep">/</span>` + (i === path.length - 1 ? `<span>${esc(i === 0 ? cat.name : p.name)}</span>` : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`)).join("")}</div>`;
+  const tools = canUp() && node.depth <= 1 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button></div>` : canUp() && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
+  $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên. Kéo một tài liệu hoặc thư mục thả vào giữa thẻ thư mục khác (hoặc vào tên thư mục ở cột trái) để chuyển vào đó; thả vào mép thẻ để đổi thứ tự.</p>' : ""}${navRow()}</section>`;
 }
 let imageTargetFolder = null;
 function setFolderImage(id) {
-  if (!isAdmin || !tree[id]) return;
+  if (!canUp() || !tree[id]) return;
   imageTargetFolder = id;
   $("#imageSaveBtn").disabled = true;
   $("#imageSaveBtn").onclick = null;
@@ -307,20 +432,14 @@ function setFolderImage(id) {
 }
 async function savePastedFolderImage(file) {
   const id = imageTargetFolder;
-  if (!isAdmin || !id || !tree[id]) return;
+  if (!canUp() || !id || !tree[id]) return;
   if (!file || !file.type.startsWith("image/")) { toast("Clipboard chưa có dữ liệu ảnh hợp lệ.", "err"); return; }
   if (file.size > 12 * 1024 * 1024) { toast("Ảnh vượt quá 12 MB. Hãy giảm dung lượng trước khi dán.", "err"); return; }
   const status = $("#imagePasteStatus"), btn = $("#imageSaveBtn");
   btn.disabled = true; status.textContent = "Đang tải ảnh lên Google Drive…";
   try {
-    const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
-    const named = new File([file], "Anh-bia-" + id.slice(0, 8) + "." + ext, { type: file.type });
-    const uploaded = await uploadFile(named, settings.rootId);
-    await drive(`https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions?sendNotificationEmail=false`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "reader", type: "anyone" })
-    });
-    const url = "https://drive.google.com/thumbnail?id=" + encodeURIComponent(uploaded.id) + "&sz=w1200";
+    const { url, id: fileId } = await uploadImage(file, "Anh-bia-" + id.slice(0, 8));
+    const uploaded = { id: fileId };
     await setDoc(doc(db, "pnd_tree", id), { imageUrl: url, imageFileId: uploaded.id }, { merge: true });
     tree[id].imageUrl = url; tree[id].imageFileId = uploaded.id;
     status.textContent = "Đã lưu ảnh bìa. Có thể đóng cửa sổ.";
@@ -342,32 +461,109 @@ function noteHTML(f) {
   if (!l.length && f.modified) l.push('<span class="muted">Cập nhật ' + fmtDate(String(f.modified).slice(0, 10)) + "</span>");
   return l.join("<br>");
 }
+/* ---------- Danh sách tài liệu: bộ lọc, dạng lưới (bìa sách), dạng danh sách ---------- */
+let filt = { year: "", fmt: "", status: "", sort: "" };
+let view = (() => { try { return localStorage.getItem("pnd_view") || "grid"; } catch (e) { return "grid"; } })();
+function applyFilt(list) {
+  let out = list.filter(f => (!filt.year || String(yearOfItem(f)) === filt.year) && (!filt.fmt || fmtOf(f) === filt.fmt) && (!filt.status || (filt.status === "-" ? !f.status : f.status === filt.status)));
+  const recentKey = f => String(f.added || f.modified || "");
+  if (filt.sort === "moi") out.sort((a, b) => recentKey(b).localeCompare(recentKey(a)));
+  else if (filt.sort === "ban-hanh") out.sort((a, b) => String(b.issued || "").localeCompare(String(a.issued || "")) || yearOfItem(b) - yearOfItem(a));
+  else if (filt.sort === "ten") out.sort((a, b) => vi.compare(a.name, b.name));
+  else out = sortFiles(out);
+  return out;
+}
+const sortAttrs = (f, noSort) => `draggable="${canUp() && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
+function metaLine(f) {
+  const y = yearOfItem(f), p = [];
+  if (f.number) p.push(`<span>${esc(f.number)}</span>`); else if (y) p.push(`<span>Năm ${y}</span>`);
+  if (f.status) p.push(`<span class="st-chip ${stCls(f.status)}">${esc(f.status)}</span>`);
+  return p.join("");
+}
+function admBtns(f) {
+  if (!canUp()) return "";
+  return `<div class="doc-adm"><button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button></div>` +
+    (driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
+}
+function docCardHTML(f, noSort) {
+  return `<article class="doc-card" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết</button>${admBtns(f)}</article>`;
+}
+function rowHTML(f, withPath) {
+  const notes = noteHTML(f), k = fmtOf(f);
+  return `<div class="doc-row" ${sortAttrs(f)}><div class="doc-cover" data-doc="${esc(f.id)}">${bookHTML(f)}</div>
+    <div><h4 data-doc="${esc(f.id)}">${f.star ? "★ " : ""}${esc(f.name)}</h4><div class="doc-meta"><span>${FMT[k][0]}${f.size ? " · " + fmtSize(f.size) : ""}</span>${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div>${notes ? `<p class="doc-note">${notes}</p>` : ""}${withPath ? `<div class="doc-path"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></div>` : ""}</div>
+    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết &amp; Xem</button>${f.link && (canDl() || !driveIdOf(f)) ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">${driveIdOf(f) ? "Mở tệp" : "Mở liên kết"}</a>` : ""}${admBtns(f)}</div></div>`;
+}
 function tableHTML(files, withPath) {
-  return `<div class="doc-list"><div class="doc-list-head">DANH MỤC</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
-    <div class="doc-main"><a class="doc-name${String(f.name || "").trim().split(/\s+/).filter(Boolean).length > 4 ? " doc-name-long" : ""}" title="${esc(f.name)}" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
-    <div class="doc-actions">${isAdmin ? `<button type="button" class="doc-edit" data-edit="${esc(f.id)}" title="Sửa thông tin">Sửa</button><button type="button" class="doc-edit" data-move="${esc(f.id)}" title="Chuyển thư mục">Chuyển</button>` : ""}${f.shared === false && f.mime !== "link" && isAdmin ? '<span class="muted">chưa chia sẻ</span>' : ""}</div>
-  </div>`).join("")}</div>`;
+  const years = [...new Set(files.map(yearOfItem).filter(Boolean))].sort((a, b) => b - a);
+  const fmts = new Set(files.map(fmtOf)), stats = [...new Set(files.map(f => f.status).filter(Boolean))];
+  const opt = (v, l, cur) => `<option value="${esc(v)}"${String(cur) === String(v) ? " selected" : ""}>${esc(l)}</option>`;
+  const shown = applyFilt(files);
+  const any = filt.year || filt.fmt || filt.status || filt.sort;
+  const bar = `<div class="filters">
+    <label>Năm: <select data-filt="year">${opt("", "Tất cả năm", filt.year)}${years.map(y => opt(y, y, filt.year)).join("")}</select></label>
+    <label>Định dạng: <select data-filt="fmt">${opt("", "Tất cả tệp", filt.fmt)}${Object.keys(FMT).filter(k => fmts.has(k) || filt.fmt === k).map(k => opt(k, FMT[k][0], filt.fmt)).join("")}</select></label>
+    <label>Hiệu lực: <select data-filt="status">${opt("", "Tất cả", filt.status)}${stats.map(s => opt(s, s, filt.status)).join("")}${opt("-", "Chưa ghi", filt.status)}</select></label>
+    <label>Sắp xếp: <select data-filt="sort">${opt("", "Theo thứ tự thư mục", filt.sort)}${opt("ban-hanh", "Ngày ban hành mới nhất", filt.sort)}${opt("moi", "Mới cập nhật", filt.sort)}${opt("ten", "Tên A – Z", filt.sort)}</select></label>
+    <span class="sp"></span>
+    ${any ? '<button type="button" class="linkish" data-freset>Đặt lại</button>' : ""}
+    <span class="view-tg" role="group" aria-label="Cách hiển thị"><button type="button" data-view="grid" class="${view === "grid" ? "on" : ""}">▦ Lưới</button><button type="button" data-view="list" class="${view === "list" ? "on" : ""}">☰ Danh sách</button></span>
+  </div>`;
+  const body = !shown.length ? `<p class="empty">Không có tài liệu khớp bộ lọc.</p>`
+    : view === "list" ? `<div class="docs-list">${shown.map(f => rowHTML(f, withPath)).join("")}</div>`
+    : `<div class="docs-grid">${shown.map(f => docCardHTML(f)).join("")}</div>`;
+  return bar + `<div class="count-line">Tìm được <b>${shown.length}</b> tài liệu</div>` + body;
 }
 
+/* ---------- Chi tiết tài liệu (xem trước Google Drive) ---------- */
+function openDoc(id) {
+  const f = items[id]; if (!f) return;
+  const did = driveIdOf(f), k = fmtOf(f);
+  $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
+  $("#docPreview").innerHTML = did
+    ? `<iframe src="https://drive.google.com/file/d/${encodeURIComponent(did)}/preview" allow="autoplay" title="Xem trước tài liệu"></iframe>${canDl() ? "" : '<span class="pv-shield" title="Tài khoản chỉ được xem, không tải về"></span>'}`
+    : f.link && /^https?:\/\//.test(f.link)
+      ? `<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
+      : `<div class="pv-card"><p class="muted">Tài liệu chưa có đường dẫn.</p></div>`;
+  const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Mức truy cập", LV[levelOf(f)].name], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
+  $("#docInfo").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${a === "Tình trạng" ? `<span class="st-chip ${stCls(b)}">${esc(b)}</span>` : a === "Mức truy cập" ? lvChip(levelOf(f)) : esc(b)}</dd>`).join("");
+  const acts = [];
+  if (f.link && (!did || canDl())) acts.push(`<a class="btn primary" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
+  if (did && !canDl()) acts.push(`<p class="muted" style="margin:0">Quyền của bạn: chỉ xem trực tuyến, không tải về.</p>`);
+  if (did && canDl() && !/google-apps/.test(f.fmime || f.mime)) acts.push(`<a class="btn" href="https://drive.google.com/uc?export=download&id=${encodeURIComponent(did)}" target="_blank" rel="noopener">Tải về máy</a>`);
+  if (canUp()) acts.push(`<button type="button" class="btn" data-edit="${esc(f.id)}">Sửa thông tin</button>`, `<button type="button" class="btn" data-move="${esc(f.id)}">Chuyển thư mục</button>`);
+  $("#docActs").innerHTML = acts.join("");
+  $("#dlgDoc").showModal();
+}
+$("#dlgDoc").addEventListener("close", () => { $("#docPreview").innerHTML = ""; });
+
 /* ---------- Tìm kiếm ---------- */
+let searchCache = { q: null, hits: null };
 const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
 async function renderSearch(q) {
   q = q.trim(); $("#searchInput").value = q;
   if (!q) { go(""); return; }
-  if (!isAdmin && !session) { $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2><p class="empty">Cần đăng nhập bằng mã tài khoản để tìm tài liệu.</p>${navRow()}</section>`; openLogin("Nhập mã tài khoản để tìm kiếm tài liệu."); return; }
   const fq = fold(q).split(/\s+/).filter(Boolean);
   const hit = f => { const hay = fold([f.name, f.issuer, f.number, f.status, f.note, pathOf(f.parent).map(p => p.name).join(" ")].join(" ")); return fq.every(w => hay.includes(w)); };
-  let res = Object.values(items).filter(f => canCat(f.cat) && hit(f)).map(f => ({ ...f, hit: false }));
+  let res = Object.values(items).filter(f => canSee(f) && hit(f)).map(f => ({ ...f, hit: false }));
   const draw = (extra) => {
     $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2><div class="crumbs">“${esc(q)}” · ${res.length} tài liệu${extra || ""}</div>${res.length ? tableHTML(sortFiles(res), true) : '<p class="empty">Không tìm thấy tài liệu phù hợp.</p>'}${navRow()}</section>`;
   };
-  draw(isAdmin ? (driveTok ? " · đang tìm cả trong nội dung tệp…" : " · đăng nhập lại Google (bấm Quét) để tìm cả trong nội dung tệp") : "");
-  if (isAdmin && driveTok) {
+  // Đổi bộ lọc trên cùng một từ khóa: dùng lại kết quả tìm trong nội dung, không gọi Drive lần nữa
+  if (canUp() && searchCache.q === q && searchCache.hits) {
+    const ids = new Set(res.map(r => r.id));
+    searchCache.hits.forEach(id => { if (items[id] && !ids.has(id)) res.push({ ...items[id], hit: true }); });
+    draw(" (gồm cả khớp trong nội dung tệp)"); return;
+  }
+  draw(canUp() ? (driveTok ? " · đang tìm cả trong nội dung tệp…" : " · đăng nhập lại Google (bấm Quét) để tìm cả trong nội dung tệp") : "");
+  if (canUp() && driveTok) {
     try {
       const ids = new Set(res.map(r => r.id));
       const qq = "fullText contains '" + q.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "' and trashed=false";
       const j = await drive("https://www.googleapis.com/drive/v3/files?pageSize=200&fields=files(id)&q=" + encodeURIComponent(qq));
-      (j.files || []).forEach(x => { if (items[x.id] && !ids.has(x.id)) res.push({ ...items[x.id], hit: true }); });
+      const hits = [];
+      (j.files || []).forEach(x => { const key = items[x.id] ? x.id : items["dr-" + x.id] ? "dr-" + x.id : null; if (key) { hits.push(key); if (!ids.has(key)) res.push({ ...items[key], hit: true }); } });
+      searchCache = { q, hits };
       draw(" (gồm cả khớp trong nội dung tệp)");
     } catch (e) { draw(" · chưa tìm được trong nội dung: " + e.message); }
   }
@@ -375,12 +571,12 @@ async function renderSearch(q) {
 
 /* ---------- Đăng nhập ---------- */
 let loginTab = "code";
-function openLogin(hint) {
-  $("#loginErr").textContent = ""; if (hint) $("#codeHint").textContent = hint;
-  setLoginTab("code"); const d = $("#dlgLogin"); if (!d.open) d.showModal(); setTimeout(() => $("#codeInput").focus(), 50);
+function openLogin(hint, tab) {
+  $("#loginErr").textContent = ""; $("#loginHint").textContent = hint || "";
+  setLoginTab(tab || "acct"); const d = $("#dlgLogin"); if (!d.open) d.showModal(); setTimeout(() => $(loginTab === "acct" ? "#admEmail" : "#codeInput").focus(), 50);
 }
 function setLoginTab(t) { loginTab = t;
-document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "admin" ? "Đăng nhập" : "Xác nhận"; }
+document.querySelectorAll("#dlgLogin .tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); document.querySelectorAll("#dlgLogin [data-pane]").forEach(p => p.hidden = p.dataset.pane !== t); $("#loginGo").textContent = t === "acct" ? "Đăng nhập" : "Xác nhận mã"; }
 
 /* Đăng ký thao tác ảnh độc lập với tab đăng nhập, chỉ một lần. */
 let imagePreviewObjectUrl = null;
@@ -414,6 +610,9 @@ $("#imageFileInput").addEventListener("change", e => {
   if (file) selectFolderCover(file);
 });
 $("#imagePasteArea").addEventListener("click", () => $("#imagePasteArea").focus());
+$("#imagePasteArea").addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); $("#imagePasteArea").classList.add("drag"); });
+$("#imagePasteArea").addEventListener("dragleave", () => $("#imagePasteArea").classList.remove("drag"));
+$("#imagePasteArea").addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); $("#imagePasteArea").classList.remove("drag"); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) selectFolderCover(f); });
 async function ensureUser() { if (auth.currentUser) return auth.currentUser; const r = await signInAnonymously(auth); return r.user; }
 async function useCode(raw) {
   try { return await useCode0(raw); } catch (e) { if (/^Mã /.test(e.message)) e.invalidCode = true; throw e; }
@@ -433,7 +632,7 @@ async function useCode0(raw) {
     await setDoc(seat, { t: Date.now() });
   }
   await setDoc(doc(db, "pnd_users", u.uid), { code, t: Date.now() });
-  saveSession({ code, han: x.han, cats: Array.isArray(x.cats) && x.cats.length ? x.cats : ["*"] });
+  saveSession({ code, han: x.han, role: x.role || "chuyen-muc", cats: Array.isArray(x.cats) && x.cats.length ? x.cats : ["*"] });
 }
 async function adminLogin() {
   const prov = new GoogleAuthProvider();
@@ -448,7 +647,7 @@ async function adminLogin() {
 function gisToken(prompt) {
   return new Promise((res, rej) => {
     if (!(window.google && google.accounts && google.accounts.oauth2) || !CFG.CLIENT_ID) return rej(new Error("gis"));
-    const hint = (user && user.email) || ADMINS[0] || "";
+    const hint = (user && user.email && !user.email.endsWith("@" + ACCT_DOMAIN) ? user.email : "") || (acct && acct.googleEmail) || (isAdminUser(user) ? ADMINS[0] : "") || "";
     const c = google.accounts.oauth2.initTokenClient({
       client_id: CFG.CLIENT_ID, scope: DRIVE_SCOPE, prompt, hint, login_hint: hint,
       callback: r => r && r.access_token ? res(r) : rej(new Error((r && r.error) || "token")),
@@ -459,11 +658,11 @@ function gisToken(prompt) {
 }
 async function ensureDrive(force) {
   if (driveTok && !force) return driveTok;
-  // Đã đăng nhập quản trị trên máy này: xin lại quyền Drive ngầm, không hỏi lại tài khoản
-  if (isAdmin) { try { const r = await gisToken(""); saveTok(r.access_token, r.expires_in); return driveTok; } catch (e) { console.warn("gia hạn Drive", e.message); } }
-  await adminLogin();
-  if (!driveTok) throw new Error("Google chưa cấp quyền Drive.");
-  return driveTok;
+  if (!canUp()) throw new Error("Tài khoản của bạn không có quyền thao tác trên Google Drive.");
+  // Xin quyền Drive ngầm (không hỏi lại), không được thì cho chọn tài khoản Google có quyền sửa thư mục PND
+  for (const pr of ["", "select_account"]) { try { const r = await gisToken(pr); saveTok(r.access_token, r.expires_in); return driveTok; } catch (e) { console.warn("quyền Drive", pr || "ngầm", e.message); } }
+  if (isAdminUser(user)) { await adminLogin(); if (driveTok) return driveTok; }
+  throw new Error("Chưa kết nối được Google Drive. Hãy cho phép cửa sổ bật lên và chọn tài khoản Google có quyền chỉnh sửa thư mục PND.");
 }
 
 /* ---------- Google Drive ---------- */
@@ -503,6 +702,41 @@ async function uploadFile(file, parent, onProg) {
   return j;
 }
 const isShared = f => (f.permissionIds || []).includes("anyoneWithLink");
+const shareAnyone = id => drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/permissions?sendNotificationEmail=false&supportsAllDrives=true`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "reader", type: "anyone" }) });
+/* Ảnh bìa (thư mục, tài liệu) nằm trong thư mục riêng “_Ảnh bìa PND”, không lẫn vào Chờ phân loại */
+const COVER_DIR = "_Ảnh bìa PND";
+const isCoverName = n => /^(_|Anh-bia-|Bia-tai-lieu-)/.test(String(n || ""));
+async function coverFolder() {
+  if (settings.coverDir) return settings.coverDir;
+  const q = encodeURIComponent("name='" + COVER_DIR + "' and mimeType='" + FOLDER + "' and '" + settings.rootId + "' in parents and trashed=false");
+  const ex = await drive("https://www.googleapis.com/drive/v3/files?fields=files(id)&q=" + q);
+  const id = ex.files && ex.files[0] ? ex.files[0].id : (await createFolder(COVER_DIR, settings.rootId)).id;
+  settings.coverDir = id; await setDoc(doc(db, "pnd_settings", "root"), { coverDir: id }, { merge: true });
+  return id;
+}
+async function uploadImage(file, prefix) {
+  const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+  const up = await uploadFile(new File([file], prefix + "-" + rid().slice(0, 6) + "." + ext, { type: file.type }), await coverFolder());
+  await shareAnyone(up.id);
+  return { url: "https://drive.google.com/thumbnail?id=" + encodeURIComponent(up.id) + "&sz=w1200", id: up.id };
+}
+/* Gắn tệp (hoặc mọi tệp trong một thư mục) đã có trên Drive vào thư viện — tệp giữ nguyên vị trí */
+async function attachDrive(did, key, parent, meta, share, nameIn) {
+  const f = await drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(did)}?supportsAllDrives=true&fields=${FIELDS}`);
+  const list = f.mimeType === FOLDER ? (await listChildren(f.id)).filter(x => x.mimeType !== FOLDER) : [f];
+  if (!list.length) throw new Error("Thư mục “" + f.name + "” chưa có tệp nào.");
+  const filled = Object.fromEntries(Object.entries(meta).filter(([, v]) => v !== "" && v !== false));
+  const out = [];
+  for (const x of list) {
+    if (share && !isShared(x)) { try { await shareAnyone(x.id); x.permissionIds = (x.permissionIds || []).concat("anyoneWithLink"); } catch (e) { console.warn("chia sẻ", x.name, e.message); } }
+    const name = nameIn && list.length === 1 ? nameIn : null;
+    let it;
+    if (items[x.id]) it = { ...items[x.id], ...filled, shared: isShared(x), ...(name ? { name } : {}) };       // tệp đã nằm trong kho PND
+    else it = { ...fileItem(x, key, parent), ...(items["dr-" + x.id] || {}), id: "dr-" + x.id, driveId: x.id, fmime: x.mimeType || "", mime: "link", cat: key, parent, ...filled, name: name || (items["dr-" + x.id] || {}).name || x.name, added: (items["dr-" + x.id] || {}).added || new Date().toISOString() };
+    await setDoc(doc(db, "pnd_items", it.id), it, { merge: true }); items[it.id] = it; out.push(it);
+  }
+  return out;
+}
 function fileItem(f, cat, parent) { return { id: f.id, name: f.name, mime: f.mimeType || "", link: f.webViewLink || ("https://drive.google.com/open?id=" + f.id), modified: f.modifiedTime || "", size: +f.size || 0, cat, parent, shared: isShared(f) }; }
 
 async function commitOps(ops) { // ops: [{type:'set'|'merge'|'del', ref, data}]
@@ -555,6 +789,7 @@ async function buildFromDrive(listFn, withCho, progress, allowCats) {
   if (!top.length) { const e = new Error("Thư mục gốc chưa chia sẻ hoặc đang trống"); e.status = 403; throw e; }
   for (const f of top) {
     const key = keyById[f.id];
+    if (!key && isCoverName(f.name)) continue; // ảnh bìa, không phải tài liệu
     if (f.mimeType === FOLDER) {
       if (key) { if (allowCats && !allowCats(key)) continue; newTree[f.id] = { id: f.id, name: CAT[key] ? CAT[key].name : f.name, parent: settings.rootId, cat: key, depth: 1 }; }
       else if (withCho) newTree[f.id] = { id: f.id, name: f.name, parent: settings.cats.cho, cat: "cho", depth: 2 };
@@ -597,9 +832,10 @@ async function publicList(id) {
   } while (page);
   return out;
 }
-const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added"];
+const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added", "access", "coverUrl", "coverFileId"];
+const TREE_KEEP = ["order", "imageUrl", "imageFileId", "access", "desc"];
 async function loadLive() {
-  if (!settings || !CFG.DRIVE_KEY || (!isAdmin && !session)) return false;
+  if (!settings || !CFG.DRIVE_KEY || !canUp()) return false;
   try {
     const allow = isAdmin ? null : (k => canCat(k));
     // Tìm tệp mới: đọc bằng quyền đăng nhập nếu quản trị đang có phiên Drive, nếu không đọc qua link chia sẻ
@@ -610,7 +846,7 @@ async function loadLive() {
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
     const meta = items; // dữ liệu ghi chú và thứ tự đã tải từ Firestore
-    for (const [id, n] of Object.entries(newTree)) if (tree[id]) { if (Number.isFinite(tree[id].order)) n.order = tree[id].order; if (tree[id].imageUrl) n.imageUrl = tree[id].imageUrl; if (tree[id].imageFileId) n.imageFileId = tree[id].imageFileId; }
+    for (const [id, n] of Object.entries(newTree)) if (tree[id]) { for (const k of TREE_KEEP) if (tree[id][k] !== undefined) n[k] = tree[id][k]; }
     for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of [...META, "order"]) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
     for (const [id, m] of Object.entries(meta)) if (m.mime === "link" && newTree[m.parent]) newItems[id] = m; // tài liệu dạng link
     if (isAdmin) for (const [id, n] of Object.entries(tree)) if (n.cat === "cho" && !newTree[id]) newTree[id] = n; // giữ Chờ phân loại khi đọc công khai
@@ -631,9 +867,9 @@ async function scanDrive(silent) {
     (await getDocs(collection(db, "pnd_tree"))).forEach(d => oldTree[d.id] = d.data());
     (await getDocs(collection(db, "pnd_items"))).forEach(d => oldItems[d.id] = d.data());
     const ops = [];
-    for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; if (Number.isFinite(saved.order)) v.order = saved.order; if (saved.imageUrl) v.imageUrl = saved.imageUrl; if (saved.imageFileId) v.imageFileId = saved.imageFileId; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
+    for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; for (const k of TREE_KEEP) if (saved[k] !== undefined) v[k] = saved[k]; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
     for (const id of Object.keys(oldTree)) if (!newTree[id]) ops.push({ type: "del", ref: doc(db, "pnd_tree", id) });
-    for (const [id, v] of Object.entries(newItems)) { const o = oldItems[id] || {}; if (["name", "mime", "link", "modified", "size", "cat", "parent", "shared"].some(k => o[k] !== v[k])) ops.push({ type: "merge", ref: doc(db, "pnd_items", id), data: v }); }
+    for (const [id, v] of Object.entries(newItems)) { const o = oldItems[id] || {}; if (!o.access) v.access = folderLevel(v.parent, newTree); if (!o.access || ["name", "mime", "link", "modified", "size", "cat", "parent", "shared"].some(k => o[k] !== v[k])) ops.push({ type: "merge", ref: doc(db, "pnd_items", id), data: v }); }
     for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link") ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
     await commitOps(ops);
     await logAct("SCAN", n + " tệp, " + Object.keys(newTree).length + " thư mục");
@@ -649,14 +885,14 @@ async function scanDrive(silent) {
 
 /* Mở chia sẻ "Bất kỳ ai có đường liên kết đều xem được" cho tệp đã xếp danh mục */
 async function shareAll() {
-  const list = Object.values(items).filter(f => f.shared === false && f.mime !== "link" && f.cat !== "cho");
+  const list = Object.values(items).filter(f => f.shared === false && driveIdOf(f) && f.cat !== "cho" && levelOf(f) !== "mat");
   if (!list.length) { toast("Mọi tài liệu đã được mở chia sẻ xem."); return; }
-  if (!await ask("Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” cho " + list.length + " tệp trong kho PND?\nNgười có mã tài khoản mới thấy được đường link trên web; nội dung tệp không bị sửa.")) return;
+  if (!await ask("Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” cho " + list.length + " tệp trong kho PND (trừ tài liệu Mật)?\nChỉ người có quyền theo mức truy cập mới thấy đường link trên web; nội dung tệp không bị sửa.")) return;
   setBusy("#btnShare", true, "Đang chia sẻ…");
   let ok = 0;
   try {
     for (const f of list) {
-      try { await drive(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?sendNotificationEmail=false`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "reader", type: "anyone" }) }); f.shared = true; ok++;
+      try { await shareAnyone(driveIdOf(f)); f.shared = true; ok++;
         await setDoc(doc(db, "pnd_items", f.id), { shared: true }, { merge: true }); } catch (e) { console.warn(f.name, e.message); }
       $("#adminNote").textContent = "Đã chia sẻ " + ok + "/" + list.length;
     }
@@ -728,7 +964,7 @@ async function deleteFolder(id) {
 /* Chuyển tệp hoặc thư mục vào thư mục khác trên Drive (thao tác của quản trị viên, có xác nhận) */
 function allFolderOptions(exclude) {
   const out = [];
-  for (const c of CATS) {
+  for (const c of visibleCats()) {
     const rootId = catRootId(c.key); if (!rootId) continue;
     const walk = (id, lvl) => { if (id === exclude) return; const n = tree[id]; if (!n) return; out.push(`<option value="${esc(id)}">${"— ".repeat(lvl)}${esc(lvl ? n.name : c.name.toUpperCase())}</option>`); sortFolders(childrenOf(id)).forEach(k => walk(k.id, lvl + 1)); };
     walk(rootId, 0);
@@ -739,18 +975,48 @@ async function moveTo(id, isFolder) {
   const cur = isFolder ? tree[id] : items[id]; if (!cur) return;
   const target = await ask("Chuyển “" + cur.name + "” sang thư mục:", { title: isFolder ? "CHUYỂN THƯ MỤC" : "CHUYỂN TÀI LIỆU", options: allFolderOptions(isFolder ? id : null), ok: "Chuyển" });
   if (!target || target === cur.parent) return;
-  try {
-    if (!isFolder && cur.mime === "link") { await setDoc(doc(db, "pnd_items", id), { parent: target, cat: tree[target].cat }, { merge: true }); }
-    else {
-      const f = await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents");
-      await drive("https://www.googleapis.com/drive/v3/files/" + id + "?addParents=" + target + "&removeParents=" + (f.parents || []).join(",") + "&fields=id", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
-    }
-    await logAct("MOVE", cur.name + " → " + (tree[target] ? tree[target].name : target));
-    toast("Đã chuyển “" + cur.name + "”. Đang cập nhật…", "ok");
-    await scanDrive(true);
-    go("f/" + encodeURIComponent(target));
-  } catch (x) { toast("Chưa chuyển được: " + x.message, "err"); }
+  if (await doMove(id, isFolder, target)) go("f/" + encodeURIComponent(target));
 }
+const folderLabel = id => tree[id] ? (tree[id].depth <= 1 ? CAT[tree[id].cat].name : tree[id].name) : id;
+/* Chuyển tài liệu hoặc cả thư mục (kèm mọi thứ bên trong) sang thư mục khác — dùng cho nút Chuyển và kéo thả */
+async function doMove(id, isFolder, target) {
+  const cur = isFolder ? tree[id] : items[id]; if (!cur || !tree[target] || target === cur.parent) return false;
+  if (isFolder && subtreeIds(id).includes(target)) { toast("Không chuyển được thư mục vào chính nó hoặc thư mục con của nó.", "err"); return false; }
+  try {
+    const driveFile = isFolder || cur.mime !== "link";
+    if (driveFile) {
+      const f = await drive("https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents&supportsAllDrives=true");
+      await drive("https://www.googleapis.com/drive/v3/files/" + id + "?addParents=" + target + "&removeParents=" + (f.parents || []).join(",") + "&fields=id&supportsAllDrives=true", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
+    }
+    await logAct("MOVE", cur.name + " → " + folderLabel(target));
+    if (isFolder) { toast("Đã chuyển thư mục “" + cur.name + "” vào “" + folderLabel(target) + "”. Đang cập nhật…", "ok"); await scanDrive(true); }
+    else {
+      await setDoc(doc(db, "pnd_items", id), { parent: target, cat: tree[target].cat }, { merge: true });
+      cur.parent = target; cur.cat = tree[target].cat; delete cur.order;
+      toast("Đã chuyển “" + cur.name + "” vào “" + folderLabel(target) + "”.", "ok"); route();
+    }
+    return true;
+  } catch (x) { toast("Chưa chuyển được: " + x.message, "err"); return false; }
+}
+/* Kéo thả: thả vào giữa thẻ thư mục (hoặc tên thư mục ở cột trái, đường dẫn) = chuyển vào; thả vào mép thẻ cùng cấp = đổi thứ tự */
+function dropTarget(e) {
+  if (!canUp() || !dragItem || !e.target.closest) return null;
+  let fid = null, el = null;
+  const card = e.target.closest('[data-sort-kind="folder"]');
+  if (card) {
+    const r = card.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+    const canReorder = dragItem.sortKind === "folder" && card.dataset.sortParent === dragItem.sortParent;
+    if (!canReorder || (x > 0.22 && x < 0.78)) { fid = card.dataset.sortId; el = card; }
+  } else {
+    const t = e.target.closest(".catnav [data-folder], .catnav [data-cat], .crumbs a[data-folder], .ftbl a[data-folder]");
+    if (t) { fid = t.dataset.folder || catRootId(t.dataset.cat); el = t; }
+  }
+  if (!fid || !tree[fid] || fid === dragItem.sortId) return null;
+  const isF = dragItem.sortKind === "folder", cur = isF ? tree[dragItem.sortId] : items[dragItem.sortId];
+  if (!cur || cur.parent === fid || (isF && subtreeIds(dragItem.sortId).includes(fid))) return null;
+  return { fid, el };
+}
+const clearDropMarks = () => document.querySelectorAll(".drop-into,.sort-over").forEach(x => x.classList.remove("drop-into", "sort-over"));
 
 function setBusy(sel, on, label) { const b = $(sel); if (b) { b.disabled = on; b.textContent = label; } }
 
@@ -762,138 +1028,400 @@ async function syncStar(f) {
 }
 
 /* ---------- Tải lên / nhập tài liệu ---------- */
-let upMode = "file", upFilesSel = [];
-function folderOptions(key) {
-  const rootId = catRootId(key); if (!rootId) return "";
-  const out = [];
-  const walk = (id, lvl) => { const n = tree[id]; if (!n) return; out.push(`<option value="${esc(id)}">${"— ".repeat(lvl)}${esc(lvl ? n.name : CAT[key].name + " (thư mục gốc)")}</option>`); sortFolders(childrenOf(id)).forEach(c => walk(c.id, lvl + 1)); };
-  walk(rootId, 0); return out.join("");
+let upFilesSel = [], upLevel = DEFAULT_LEVEL, upLevelTouched = false, upAutoFrom = null;
+/* Ô chọn ảnh bìa: bấm để chọn, kéo thả hoặc dán (Ctrl+V) */
+function coverPicker(el) {
+  const st = { file: null, clear: false };
+  const inp = el.querySelector("input"), prev = el.querySelector(".cp-prev");
+  let obj = null;
+  const show = url => { prev.style.backgroundImage = url ? `url("${url}")` : ""; el.classList.toggle("has", !!url); };
+  const set = file => {
+    if (!file || !file.type.startsWith("image/")) { toast("Hãy chọn tệp ảnh (JPG, PNG, WebP).", "err"); return; }
+    if (file.size > 12 * 1024 * 1024) { toast("Ảnh vượt quá 12 MB.", "err"); return; }
+    if (obj) URL.revokeObjectURL(obj); obj = URL.createObjectURL(file);
+    st.file = file; st.clear = false; show(obj);
+  };
+  el.addEventListener("click", () => inp.click());
+  el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } });
+  inp.addEventListener("click", e => e.stopPropagation());
+  inp.onchange = () => { if (inp.files[0]) set(inp.files[0]); };
+  el.addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); el.classList.add("drag"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drag"));
+  el.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); el.classList.remove("drag"); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) set(f); });
+  el.addEventListener("paste", e => { const it = [...(e.clipboardData && e.clipboardData.items || [])].find(x => x.type.startsWith("image/")); if (it) { e.preventDefault(); set(it.getAsFile()); } });
+  st.reset = url => { st.file = null; st.clear = false; inp.value = ""; show(url || ""); };
+  st.markClear = () => { st.file = null; st.clear = true; inp.value = ""; show(""); };
+  return st;
 }
+const upCover = coverPicker($("#upCover")), edCover = coverPicker($("#edCover"));
+
+/* --- Nhận diện tên văn bản: từ tên tệp và từ các tài liệu đã lưu --- */
+const stripExt = n => String(n || "").replace(/\.[a-z0-9]{2,5}$/i, "");
+function issuerOf(suf) {
+  const s = String(suf || "").toUpperCase();
+  if (/^QH\d*$/.test(s)) return "Quốc hội";
+  if (/^UBTVQH\d*$/.test(s)) return "Ủy ban Thường vụ Quốc hội";
+  if (/^L-CTN$/.test(s)) return "Chủ tịch nước";
+  if (/(NĐ|ND|NQ)-CP$/.test(s)) return "Chính phủ";
+  if (/QĐ-TTG$|QD-TTG$|CT-TTG$/.test(s)) return "Thủ tướng Chính phủ";
+  if (/-HVHC$|-HVHCQT$|-HVHCQG$/.test(s)) return "Học viện Hành chính và Quản trị công";
+  return "";
+}
+function guessMeta(text) {
+  const m = String(text || "").match(/(\d{1,4})\s*[\/_]\s*((?:19|20)\d{2})\s*[\/_]\s*([A-ZĐa-zđ]{1,8}\d*(?:\s*-\s*[A-ZĐa-zđ0-9]{1,10}){0,3})/);
+  if (!m) return {};
+  const number = m[1] + "/" + m[2] + "/" + m[3].replace(/\s+/g, "").toUpperCase();
+  return { number, issuer: issuerOf(number.split("/")[2]) };
+}
+const cleanName = n => stripExt(n).replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+function findSaved(name, number) {
+  const fn = fold(cleanName(name));
+  const all = Object.values(items);
+  return (fn && all.find(f => fold(cleanName(f.name)) === fn)) || (number && all.find(f => f.number && f.number.toUpperCase() === number.toUpperCase())) || null;
+}
+function applyAuto(name) {
+  const g = guessMeta(name), saved = findSaved(name, g.number), notes = [];
+  const fill = (id, v) => { const el = $(id); if (v && !el.value) { el.value = v; return true; } return false; };
+  if (saved) {
+    ["Issuer:issuer", "Number:number", "Issued:issued", "Effective:effective", "Status:status", "Note:note"].forEach(p => { const [a, b] = p.split(":"); fill("#up" + a, saved[b]); });
+    if (!upLevelTouched && saved.access) setUpLevel(saved.access, false);
+    upAutoFrom = saved.id;
+    notes.push("Nhận diện theo tài liệu đã lưu “" + stripExt(saved.name) + "”: đã điền sẵn thông tin ban hành.");
+  } else {
+    upAutoFrom = null;
+    if (fill("#upNumber", g.number)) notes.push("số " + g.number);
+    if (fill("#upIssuer", g.issuer)) notes.push(g.issuer);
+    if (notes.length) notes.splice(0, notes.length, "Nhận diện từ tên: " + notes.join(" · ") + ".");
+  }
+  $("#upAuto").textContent = notes.join(" ");
+  if (notes.length) $("#upMore").open = $("#upMore").open || !!saved;
+}
+function setUpLevel(k, touched) {
+  upLevel = k; if (touched) upLevelTouched = true;
+  document.querySelectorAll("#upAccess [data-lv]").forEach(b => b.classList.toggle("on", b.dataset.lv === k));
+  $("#upLvHint").textContent = LV[k].desc + ".";
+}
+function upFolderChanged() { const id = $("#upFolder").value; if (!upLevelTouched && tree[id]) setUpLevel(folderLevel(id), false); }
+function renderUpList() {
+  $("#upList").innerHTML = upFilesSel.map((f, i) => `<span class="chip">${esc(f.name)} <small>${fmtSize(f.size)}</small><button type="button" data-rmfile="${i}" aria-label="Bỏ tệp">×</button></span>`).join("");
+  const one = upFilesSel.length + parseBulk($("#upLinks").value).length <= 1;
+  $("#upName").disabled = !one;
+  $("#upName").placeholder = one ? "Tự điền theo tên tệp; gõ để chọn tên đã lưu trước đó" : "Nhiều tài liệu: mỗi tài liệu lấy theo tên tệp / tên ghi trước dấu |";
+  if (one && upFilesSel.length === 1 && !$("#upName").value) { $("#upName").value = cleanName(upFilesSel[0].name); applyAuto(upFilesSel[0].name); }
+}
+function addUpFiles(list) {
+  const arr = [...list];
+  if (!arr.length) return;
+  upFilesSel = upFilesSel.concat(arr);
+  renderUpList();
+}
+
 function openUpload(folderId, files) {
-  if (!isAdmin) { openLogin(); setLoginTab("admin"); $("#loginErr").textContent = "Tải tài liệu lên cần đăng nhập quản trị."; return; }
-  if (!settings) { toast("Chưa có cây thư mục. Bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
-  $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; upFilesSel = []; $("#dropText").textContent = "Kéo thả tệp vào đây hoặc bấm để chọn";
-  $("#upCat").innerHTML = CATS.map(c => `<option value="${c.key}">${esc(c.name)}</option>`).join("");
-  const cur = currentCatKey(); if (cur && CAT[cur]) $("#upCat").value = cur;
-  $("#upFolder").innerHTML = folderOptions($("#upCat").value);
-  const h = decodeURIComponent(location.hash.slice(1));
+  if (!canUp()) { openLogin("Tải tài liệu lên cần tài khoản Thủ thư / Biên mục hoặc Quản trị."); return; }
+  if (!settings) { toast("Chưa có cây thư mục. Quản trị viên bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
+  $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; $("#upAuto").textContent = ""; upFilesSel = []; upCover.reset(); upLevelTouched = false; upAutoFrom = null;
+  $("#upMore").open = false;
+  $("#upFolder").innerHTML = allFolderOptions();
+  $("#nameList").innerHTML = [...new Set(Object.values(items).map(f => cleanName(f.name)))].sort(vi.compare).slice(0, 600).map(n => `<option value="${esc(n)}">`).join("");
+  $("#upAccess").innerHTML = LEVELS.filter(l => isAdmin || l.key !== "mat").map(l => `<button type="button" class="lv-btn lv-${l.key}" data-lv="${l.key}">${esc(l.name)}</button>`).join("");
+  const h = decodeURIComponent(location.hash.slice(1)), cur = currentCatKey();
   const target = folderId && tree[folderId] ? folderId : (h.startsWith("f/") && tree[h.slice(2)] ? h.slice(2) : (cur ? catRootId(cur) : ""));
-  if (target && tree[target]) { $("#upCat").value = tree[target].cat; $("#upFolder").innerHTML = folderOptions(tree[target].cat); $("#upFolder").value = target; }
-  $("#upTitle").textContent = target && tree[target] && tree[target].depth >= 2 ? "TẢI LÊN: " + tree[target].name.toUpperCase() : "TẢI TÀI LIỆU LÊN";
-  if (files && files.length) { upFilesSel = [...files]; $("#dropText").textContent = upFilesSel.map(f => f.name).join(", "); }
-  $("#newFolderWrap").hidden = false; setUpMode("file");
+  if (target && tree[target]) $("#upFolder").value = target;
+  setUpLevel(folderLevel($("#upFolder").value), false);
+  $("#upTitle").textContent = "TẢI TÀI LIỆU LÊN";
+  if (files && files.length) addUpFiles(files); else renderUpList();
   $("#dlgUpload").showModal();
 }
-function setUpMode(m) { upMode = m; document.querySelectorAll("[data-up]").forEach(b => b.classList.toggle("on", b.dataset.up === m)); document.querySelectorAll("[data-uppane]").forEach(p => p.hidden = p.dataset.uppane !== m); }
 function metaFrom(pref) {
   return { issuer: $(pref + "Issuer").value.trim(), number: $(pref + "Number").value.trim(), issued: $(pref + "Issued").value, effective: $(pref + "Effective").value, status: $(pref + "Status").value, note: $(pref + "Note").value.trim(), star: $(pref + "Star").checked };
 }
+function parseBulk(text) {
+  return String(text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean).map(line => {
+    const m = line.match(/^(.*?)\s*\|\s*(\S+)\s*$/);
+    return { line, name: m ? m[1].trim() : "", url: m ? m[2] : line };
+  });
+}
+const isWebUrl = s => { try { const u = new URL(s); return /^https?:$/.test(u.protocol); } catch (e) { return false; } };
+const nameFromUrl = s => { try { const u = new URL(s); return (u.hostname.replace(/^www\./, "") + decodeURIComponent(u.pathname.replace(/\/$/, ""))).slice(0, 120); } catch (e) { return s.slice(0, 120); } };
 async function submitUpload(e) {
   e.preventDefault();
-  const key = $("#upCat").value; let parent = $("#upFolder").value;
-  const meta = metaFrom("#up"), nameIn = $("#upName").value.trim(), newF = $("#upNewFolder").value.trim();
-  if (!parent) { $("#upErr").textContent = "Chọn thư mục lưu."; return; }
-  if (upMode === "file" && !upFilesSel.length) { $("#upErr").textContent = "Chọn ít nhất một tệp."; return; }
-  if (upMode === "link") { try { const u = new URL($("#upUrl").value.trim()); if (!/^https?:$/.test(u.protocol)) throw 0; } catch (x) { $("#upErr").textContent = "Đường link phải bắt đầu bằng http:// hoặc https://."; return; } if (!nameIn) { $("#upErr").textContent = "Nhập tên văn bản cho đường link."; return; } }
-  if (upFilesSel.some(f => f.size > 50 * 1024 * 1024)) { $("#upErr").textContent = "Có tệp lớn hơn 50 MB; hãy tải trực tiếp lên Drive rồi bấm Quét."; return; }
-  $("#upErr").textContent = ""; const btn = $("#upGo"); btn.disabled = true;
+  let parent = $("#upFolder").value; const key = tree[parent] ? tree[parent].cat : "";
+  const nameIn = $("#upName").disabled ? "" : $("#upName").value.trim(), newF = $("#upNewFolder").value.trim();
+  const meta = { ...metaFrom("#up"), access: upLevel };
+  const links = parseBulk($("#upLinks").value);
+  const err = m => { $("#upErr").textContent = m; };
+  if (!parent || !key) return err("Chọn thư mục lưu.");
+  if (!upFilesSel.length && !links.length) return err("Kéo thả hoặc chọn tệp từ máy tính, hoặc dán đường link.");
+  if (upFilesSel.some(f => f.size > 50 * 1024 * 1024)) return err("Có tệp lớn hơn 50 MB: hãy tải thẳng lên Google Drive rồi dán link vào ô bên dưới.");
+  const bad = links.filter(b => !driveIdFrom(b.url) && !isWebUrl(b.url));
+  if (bad.length) return err("Dòng chưa có đường link hợp lệ: " + bad.map(b => "“" + b.line.slice(0, 60) + "”").join("; "));
+  if (links.length === 1 && !upFilesSel.length && !driveIdFrom(links[0].url) && !nameIn && !links[0].name) return err("Nhập tên văn bản cho đường link.");
+  err(""); const btn = $("#upGo"); btn.disabled = true;
+  const msg = t => { $("#upMsg").textContent = t; };
+  const saved = [], fails = [], share = upLevel !== "mat", now = () => new Date().toISOString();
   try {
     if (newF) {
-      $("#upMsg").textContent = "Đang tạo thư mục…";
+      msg("Đang tạo thư mục…");
       const f = await createFolder(newF, parent); const p = tree[parent];
       const node = { id: f.id, name: f.name, parent, cat: key, depth: (p ? p.depth : 1) + 1 };
       await setDoc(doc(db, "pnd_tree", f.id), node); tree[f.id] = node; parent = f.id;
+      $("#upNewFolder").value = ""; $("#upFolder").innerHTML = allFolderOptions(); $("#upFolder").value = parent;
     }
-    const saved = [];
-    if (upMode === "file") {
-      let i = 0;
-      for (const file of upFilesSel) {
-        $("#upMsg").textContent = "Đang tải lên " + (++i) + "/" + upFilesSel.length + ": " + file.name;
+    let cv = null;
+    if (upCover.file) { msg("Đang tải ảnh bìa…"); cv = await uploadImage(upCover.file, "Bia-tai-lieu"); }
+    const withCover = it => cv ? { ...it, coverUrl: cv.url, coverFileId: cv.id } : it;
+    const single = upFilesSel.length + links.length === 1;
+    let i = 0; const total = upFilesSel.length + links.length;
+    for (const file of upFilesSel) {
+      msg("Đang tải lên " + (++i) + "/" + total + ": " + file.name);
+      try {
         const d = await uploadFile(file, parent);
-        const it = { ...fileItem(d, key, parent), ...meta, name: (nameIn && upFilesSel.length === 1) ? nameIn : d.name, added: new Date().toISOString() };
+        if (share) { try { await shareAnyone(d.id); d.permissionIds = (d.permissionIds || []).concat("anyoneWithLink"); } catch (x) { console.warn("chia sẻ", x.message); } }
+        const g = guessMeta(file.name);
+        const it = withCover({ ...fileItem(d, key, parent), fmime: d.mimeType || "", ...meta, number: meta.number || (single ? "" : g.number || ""), issuer: meta.issuer || (single ? "" : g.issuer || ""), name: single && nameIn ? nameIn : cleanName(d.name), added: now() });
         await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
-      }
-    } else {
-      const it = { id: "lk-" + rid(), name: nameIn, mime: "link", link: $("#upUrl").value.trim(), cat: key, parent, shared: true, ...meta, added: new Date().toISOString() };
-      await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+      } catch (x) { fails.push(file.name + " — " + x.message); }
+    }
+    for (const b of links) {
+      msg("Đang gắn " + (++i) + "/" + total + ": " + (b.name || b.url).slice(0, 70));
+      try {
+        const did = driveIdFrom(b.url);
+        if (did) for (const it of await attachDrive(did, key, parent, meta, share, single ? (nameIn || b.name) : b.name)) {
+          if (cv) { Object.assign(it, { coverUrl: cv.url, coverFileId: cv.id }); await setDoc(doc(db, "pnd_items", it.id), { coverUrl: cv.url, coverFileId: cv.id }, { merge: true }); }
+          saved.push(it);
+        } else {
+          const it = withCover({ id: "lk-" + rid(), name: (single && nameIn) || b.name || nameFromUrl(b.url), mime: "link", link: b.url, cat: key, parent, shared: true, ...meta, added: now() });
+          await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+        }
+      } catch (x) { fails.push(b.line.slice(0, 80) + " — " + x.message); }
     }
     for (const it of saved) if (it.star) await syncStar(it);
-    await logAct(upMode === "file" ? "UPLOAD" : "LINK", saved.map(s => s.name).join("; "));
+    if (saved.length) await logAct("UPLOAD", saved.map(s => s.name).join("; ").slice(0, 900));
+    if (fails.length) {
+      msg(saved.length ? "Đã lưu " + saved.length + " tài liệu." : "");
+      err("Chưa lưu được " + fails.length + " mục:\n" + fails.join("\n"));
+      upFilesSel = []; renderUpList(); if (saved.length) route();
+      return;
+    }
     $("#dlgUpload").close();
-    toast("Đã lưu " + saved.length + " tài liệu.", "ok");
+    toast("Đã lưu " + saved.length + " tài liệu vào thư viện.", "ok");
     go("f/" + parent);
-  } catch (x) { $("#upErr").textContent = x.message || "Chưa lưu được."; $("#upMsg").textContent = ""; }
+  } catch (x) { err(x.message || "Chưa lưu được."); msg(""); }
   finally { btn.disabled = false; }
 }
+
 
 /* ---------- Sửa thông tin tài liệu ---------- */
 let editing = null;
 function openEdit(id) {
   const f = items[id]; if (!f) return; editing = id;
-  $("#edName").value = f.name || ""; $("#edIssuer").value = f.issuer || ""; $("#edNumber").value = f.number || ""; $("#edIssued").value = f.issued || ""; $("#edEffective").value = f.effective || ""; $("#edStatus").value = f.status || ""; $("#edNote").value = f.note || ""; $("#edStar").checked = !!f.star; $("#edErr").textContent = "";
+  $("#edName").value = f.name || ""; $("#edIssuer").value = f.issuer || ""; $("#edNumber").value = f.number || ""; $("#edIssued").value = f.issued || ""; $("#edEffective").value = f.effective || ""; $("#edStatus").value = f.status || ""; $("#edNote").value = f.note || ""; $("#edStar").checked = !!f.star; $("#edErr").textContent = ""; $("#edMsg").textContent = "";
+  $("#edAccess").innerHTML = LEVELS.filter(l => isAdmin || l.key !== "mat" || levelOf(f) === "mat").map(l => `<option value="${l.key}"${l.key === levelOf(f) ? " selected" : ""}>${esc(l.name)} — ${esc(l.desc)}</option>`).join("");
+  edCover.reset(f.coverUrl || ""); $("#edCoverClear").hidden = !f.coverUrl;
   $("#dlgEdit").showModal();
 }
 async function submitEdit(e) {
   e.preventDefault(); const f = items[editing]; if (!f) return;
-  const patch = { id: f.id, cat: f.cat, parent: f.parent, link: f.link || "", mime: f.mime || "", ...metaFrom("#ed"), name: $("#edName").value.trim() || f.name };
-  try { await setDoc(doc(db, "pnd_items", f.id), patch, { merge: true }); Object.assign(f, patch); await syncStar(f); $("#dlgEdit").close(); toast("Đã lưu thông tin.", "ok"); route(); }
-  catch (x) { $("#edErr").textContent = x.message; }
+  const patch = { id: f.id, cat: f.cat, parent: f.parent, link: f.link || "", mime: f.mime || "", ...metaFrom("#ed"), access: $("#edAccess").value, name: $("#edName").value.trim() || f.name };
+  const toMat = patch.access === "mat" && levelOf(f) !== "mat";
+  const btn = $("#edGo"); btn.disabled = true;
+  try {
+    if (edCover.file) { $("#edMsg").textContent = "Đang tải ảnh bìa…"; const cv = await uploadImage(edCover.file, "Bia-tai-lieu"); patch.coverUrl = cv.url; patch.coverFileId = cv.id; }
+    else if (edCover.clear) { patch.coverUrl = ""; patch.coverFileId = ""; }
+    await setDoc(doc(db, "pnd_items", f.id), patch, { merge: true }); Object.assign(f, patch); await syncStar(f);
+    $("#dlgEdit").close(); toast("Đã lưu thông tin.", "ok");
+    if (toMat) await offerUnshare([f]);
+    route();
+  }
+  catch (x) { $("#edErr").textContent = x.message; $("#edMsg").textContent = ""; }
+  finally { btn.disabled = false; }
 }
+$("#edCoverClear").onclick = () => { edCover.markClear(); $("#edCoverClear").hidden = true; };
 
-/* ---------- Quản lý mã tài khoản (như mã lớp PNL) ---------- */
+/* ---------- Tài khoản & phân quyền: tài khoản cá nhân và mã truy cập dùng chung, cùng một bộ vai trò ---------- */
+let app2 = null;
+async function createAuthUser(email, pw) {
+  // Tạo người dùng bằng một phiên Firebase phụ để không làm quản trị viên bị đăng xuất
+  app2 = app2 || initializeApp(CFG.FIREBASE, "pnd-cap-tai-khoan");
+  const a2 = getAuth(app2);
+  try { await createUserWithEmailAndPassword(a2, email, pw); }
+  finally { try { await signOut(a2); } catch (e) {} }
+}
+const roleOpts = cur => Object.entries(ROLES).map(([k, r]) => `<option value="${k}"${k === cur ? " selected" : ""}>${esc(r.name)}</option>`).join("");
+const catChecks = (cls, allId) => `<div class="cat-checks"><label><input type="checkbox" id="${allId}" checked> <b>Tất cả danh mục</b></label>${PUBLIC_CATS.map(c => `<label><input type="checkbox" class="${cls}" value="${c.key}" disabled> ${esc(c.name)}</label>`).join("")}</div>`;
+function bindCats(cls, allId) {
+  const all = $("#" + allId), boxes = () => document.querySelectorAll("." + cls);
+  all.onchange = () => boxes().forEach(x => { x.disabled = all.checked; if (x.disabled) x.checked = false; });
+  return {
+    get: () => all.checked ? ["*"] : [...boxes()].filter(x => x.checked).map(x => x.value),
+    set: cs => { const a = !cs || !cs.length || cs.includes("*"); all.checked = a; boxes().forEach(x => { x.disabled = a; x.checked = !a && cs.includes(x.value); }); }
+  };
+}
+const catsText = cs => !cs || cs.includes("*") ? "Tất cả" : cs.map(k => CAT[k] ? CAT[k].name : k).join(", ");
+function matrixHTML() {
+  const rows = [["Khách (chưa đăng nhập)", GUEST], ...Object.values(ROLES).map(r => [r.name, r])];
+  return `<div class="tbl-wrap"><table class="adm-table matrix"><thead><tr><th>Vai trò</th>${LEVELS.map(l => `<th>${lvChip(l.key)}</th>`).join("")}<th>Tải về</th><th>Tải lên, quản lý</th></tr></thead><tbody>
+    ${rows.map(([n, r]) => `<tr><td><b>${esc(n)}</b><br><span class="muted">${esc(r.desc)}</span></td>${LEVELS.map(l => `<td class="c">${r.levels.includes(l.key) ? "✓" : "—"}</td>`).join("")}<td class="c">${r.dl ? "✓" : "—"}</td><td class="c">${r.up ? "✓" : "—"}</td></tr>`).join("")}
+  </tbody></table></div><p class="muted">Mỗi tài khoản hoặc mã còn có thể giới hạn theo danh mục. Mức truy cập đặt cho từng tài liệu, hoặc đặt cho thư mục để áp dụng chung (trang <a data-go="thu-muc" href="#thu-muc">Quản lý thư mục</a>).</p>`;
+}
 async function renderAccounts() {
   if (!isAdmin) {
-    $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ MÃ TÀI KHOẢN</h2><p class="empty">Chỉ quản trị viên được cấp mã. Đăng nhập bằng tài khoản Google quản trị.</p><div style="text-align:center"><button type="button" class="pill" style="width:auto;display:inline-block;padding:10px 24px" data-adminlogin>ĐĂNG NHẬP QUẢN TRỊ</button></div>${navRow()}</section>`;
+    $("#main").innerHTML = `<section class="box"><h2 class="box-title">TÀI KHOẢN & PHÂN QUYỀN</h2><p class="empty">Chỉ quản trị viên hệ thống được cấp tài khoản và phân quyền.</p><div style="text-align:center;margin-top:12px"><button type="button" class="pill" data-adminlogin>ĐĂNG NHẬP QUẢN TRỊ</button></div>${navRow()}</section>`;
     return;
   }
-  const d = new Date(); d.setMonth(d.getMonth() + 6); const def = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
-  $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ MÃ TÀI KHOẢN</h2>
-    <form id="maForm" novalidate>
-      <p class="muted" id="maHelp">Một mã dùng chung cho nhiều người. Mỗi mã mở một hoặc nhiều danh mục (giống mã lớp của PN Library); người vượt quá số người cho phép sẽ bị từ chối.</p>
+  $("#main").innerHTML = `<section class="box"><h2 class="box-title">TÀI KHOẢN & PHÂN QUYỀN</h2>
+    <div class="crumbs"><a data-home>Trang chủ</a><span class="sep">/</span><span>Tài khoản & phân quyền</span></div>
+    <details class="panel-form" open><summary class="grp-title" style="margin:0;cursor:pointer">Bảng quyền theo vai trò</summary>${matrixHTML()}</details>
+
+    <h3 class="grp-title">Cấp tài khoản</h3>
+    <form id="acForm" class="panel-form" novalidate>
+      <div class="grid2">
+        <label class="fld"><span>Tên đăng nhập hoặc email Google *</span><input id="acUser" autocomplete="off" spellcheck="false" placeholder="Ví dụ: nguyenvana hoặc ten@gmail.com"></label>
+        <label class="fld"><span>Mật khẩu khởi tạo <small class="muted">(để trống nếu chỉ đăng nhập bằng Google)</small></span><input id="acPass" type="text" autocomplete="new-password" placeholder="Ít nhất 6 ký tự"></label>
+        <label class="fld"><span>Họ và tên *</span><input id="acName" maxlength="80"></label>
+        <label class="fld"><span>Đơn vị / đối tượng</span><input id="acUnit" maxlength="80" placeholder="Ví dụ: Khoa Luật — Lớp LKT K12"></label>
+        <label class="fld"><span>Vai trò</span><select id="acRole">${roleOpts("xem")}</select></label>
+        <label class="fld"><span>Hạn sử dụng <small class="muted">(để trống: không giới hạn)</small></span><input id="acHan" type="date"></label>
+      </div>
+      <p class="hint" id="acRoleDesc"></p>
+      <div class="fld" id="acCatsWrap"><span>Danh mục được xem</span>${catChecks("acCat", "acAll")}</div>
+      <label class="fld chk inline" id="acDriveWrap" hidden><input type="checkbox" id="acDrive"><span>Cấp quyền chỉnh sửa thư mục PND trên Google Drive cho email này (cần để tải tệp lên)</span></label>
+      <p class="err" id="acErr"></p><p class="muted" id="acMsg"></p>
+      <div class="dlg-act"><button type="button" class="btn" id="acCancel" hidden>Hủy sửa</button><button type="submit" class="btn primary" id="acGo">Cấp tài khoản</button></div>
+    </form>
+    <h3 class="grp-title">Danh sách tài khoản <span class="muted" id="acCount"></span></h3>
+    <div class="tbl-wrap"><table class="adm-table"><thead><tr><th>Tài khoản</th><th>Họ tên & đơn vị</th><th>Vai trò</th><th>Danh mục</th><th>Hạn</th><th>Trạng thái</th><th></th></tr></thead><tbody id="acBody"><tr><td colspan="7" class="muted">Đang tải…</td></tr></tbody></table></div>
+
+    <h3 class="grp-title">Mã truy cập dùng chung</h3>
+    <form id="maForm" class="panel-form" novalidate>
+      <p class="muted">Một mã dùng chung cho nhiều người (ví dụ cả lớp). Mã mang một vai trò như tài khoản; người vượt quá số người cho phép sẽ bị từ chối.</p>
       <div class="grid2">
         <label class="fld"><span>Mã</span><input id="maCode" maxlength="24" placeholder="Ví dụ: PND2026" style="text-transform:uppercase" autocomplete="off"></label>
+        <label class="fld"><span>Vai trò</span><select id="maRole">${roleOpts("xem")}</select></label>
         <label class="fld"><span>Số người được dùng mã</span><input id="maMax" type="number" min="1" max="1000" value="20"></label>
-        <label class="fld"><span>Hết hạn ngày</span><input id="maHan" type="date" value="${def}"></label>
-        <label class="fld"><span>Ghi chú</span><input id="maNote" maxlength="80" placeholder="Ví dụ: Tổ bộ môn Luật Dân sự"></label>
+        <label class="fld"><span>Hết hạn ngày</span><input id="maHan" type="date"></label>
+        <label class="fld" style="grid-column:1/-1"><span>Ghi chú</span><input id="maNote" maxlength="80" placeholder="Ví dụ: Tổ bộ môn Luật Dân sự"></label>
       </div>
-      <div class="fld" style="margin-top:8px"><span>Danh mục được xem</span>
-        <div class="cat-checks"><label><input type="checkbox" id="maAll" checked> <b>Tất cả danh mục</b></label>${PUBLIC_CATS.map(c => `<label><input type="checkbox" class="maCat" value="${c.key}" disabled> ${esc(c.name)}</label>`).join("")}</div>
-      </div>
+      <div class="fld" style="margin-top:8px"><span>Danh mục được xem</span>${catChecks("maCat", "maAll")}</div>
       <p class="err" id="maErr"></p><p class="muted" id="maMsg"></p>
       <div class="dlg-act"><button type="button" class="btn" id="maCancel" hidden>Hủy sửa</button><button type="submit" class="btn primary" id="maGo">Cấp mã</button></div>
     </form>
-    <div class="grp-title" style="margin-top:18px">Danh sách mã <span class="muted" id="maCount"></span></div>
-    <div class="tbl-wrap"><table class="adm-table"><thead><tr><th>Mã</th><th>Ghi chú</th><th>Danh mục</th><th>Hạn dùng</th><th>Đã dùng</th><th>Trạng thái</th><th></th></tr></thead><tbody id="maBody"><tr><td colspan="7" class="muted">Đang tải…</td></tr></tbody></table></div>
+    <div class="tbl-wrap"><table class="adm-table"><thead><tr><th>Mã</th><th>Ghi chú</th><th>Vai trò</th><th>Danh mục</th><th>Hạn dùng</th><th>Đã dùng</th><th>Trạng thái</th><th></th></tr></thead><tbody id="maBody"><tr><td colspan="8" class="muted">Đang tải…</td></tr></tbody></table></div>
     ${navRow()}</section>`;
+
+  /* --- Tài khoản cá nhân --- */
+  const acCats = bindCats("acCat", "acAll");
+  let AC_EDIT = null, AC = [];
+  const showRole = () => {
+    const r = $("#acRole").value, isGoogle = /@/.test($("#acUser").value) && !$("#acUser").value.trim().toLowerCase().endsWith("@" + ACCT_DOMAIN);
+    $("#acRoleDesc").textContent = ROLES[r].desc + ".";
+    $("#acCatsWrap").hidden = r === "quan-tri";
+    $("#acDriveWrap").hidden = !(ROLES[r].up && isGoogle && !AC_EDIT);
+  };
+  $("#acRole").onchange = showRole; $("#acUser").oninput = showRole; showRole();
+  const acStop = () => { AC_EDIT = null; $("#acForm").reset(); $("#acUser").readOnly = false; acCats.set(["*"]); $("#acGo").textContent = "Cấp tài khoản"; $("#acCancel").hidden = true; $("#acPass").placeholder = "Ít nhất 6 ký tự"; showRole(); };
+  $("#acCancel").onclick = acStop;
+  async function acList() {
+    try {
+      AC = []; (await getDocs(collection(db, "pnd_accounts"))).forEach(d => AC.push({ id: d.id, ...d.data() }));
+      AC.sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")));
+      $("#acCount").textContent = AC.length ? "(" + AC.length + ")" : "";
+      $("#acBody").innerHTML = AC.length ? AC.map(x => {
+        const st = x.disabled ? '<span class="badge bad">Đã khóa</span>' : x.han && todayISO() > x.han ? '<span class="badge bad">Hết hạn</span>' : '<span class="badge ok">Hoạt động</span>';
+        return `<tr><td><b>${esc(showName(x.id))}</b><br><span class="muted">${x.login === "google" ? "Đăng nhập Google" : "Tên đăng nhập + mật khẩu"}</span></td><td>${esc(x.name || "")}<br><span class="muted">${esc(x.unit || "")}</span></td><td>${esc((ROLES[x.role] || {}).name || x.role)}</td><td>${esc(x.role === "quan-tri" ? "Tất cả" : catsText(x.cats))}</td><td>${x.han ? fmtDate(x.han) : "—"}</td><td>${st}</td>
+          <td style="white-space:nowrap"><button type="button" class="btn sm" data-acedit="${esc(x.id)}">Sửa</button> <button type="button" class="btn sm" data-aclock="${esc(x.id)}">${x.disabled ? "Mở khóa" : "Khóa"}</button> <button type="button" class="btn sm" data-acdel="${esc(x.id)}">Xóa</button></td></tr>`;
+      }).join("") : '<tr><td colspan="7" class="muted">Chưa có tài khoản nào.</td></tr>';
+      $("#acBody").querySelectorAll("[data-acedit]").forEach(b => b.onclick = () => {
+        const x = AC.find(y => y.id === b.dataset.acedit); AC_EDIT = x.id;
+        $("#acUser").value = showName(x.id); $("#acUser").readOnly = true; $("#acPass").value = ""; $("#acPass").placeholder = "Không đổi mật khẩu khi sửa";
+        $("#acName").value = x.name || ""; $("#acUnit").value = x.unit || ""; $("#acRole").value = x.role || "xem"; $("#acHan").value = x.han || ""; acCats.set(x.cats);
+        $("#acGo").textContent = "Lưu thay đổi"; $("#acCancel").hidden = false; showRole(); $("#acForm").scrollIntoView({ behavior: "smooth" });
+      });
+      $("#acBody").querySelectorAll("[data-aclock]").forEach(b => b.onclick = async () => {
+        const x = AC.find(y => y.id === b.dataset.aclock);
+        try { await setDoc(doc(db, "pnd_accounts", x.id), { disabled: !x.disabled, updated: new Date().toISOString() }, { merge: true }); await logAct(x.disabled ? "ACCT_UNLOCK" : "ACCT_LOCK", x.id); acList(); }
+        catch (e) { $("#acErr").textContent = e.message; }
+      });
+      $("#acBody").querySelectorAll("[data-acdel]").forEach(b => b.onclick = async () => {
+        if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Bấm lần nữa để xóa"; setTimeout(() => { if (b.isConnected) { b.dataset.armed = ""; b.textContent = "Xóa"; } }, 4000); return; }
+        try { await deleteDoc(doc(db, "pnd_accounts", b.dataset.acdel)); await logAct("ACCT_DEL", b.dataset.acdel); $("#acMsg").textContent = "Đã xóa quyền của tài khoản " + showName(b.dataset.acdel) + ". Người này giờ chỉ xem được tài liệu Công khai."; acList(); }
+        catch (e) { $("#acErr").textContent = e.message; }
+      });
+    } catch (e) { $("#acBody").innerHTML = `<tr><td colspan="7" class="err">Chưa tải được danh sách: ${esc(e.message)}</td></tr>`; }
+  }
+  $("#acForm").onsubmit = async e => {
+    e.preventDefault();
+    const raw = $("#acUser").value.trim(), pw = $("#acPass").value, name = $("#acName").value.trim(), unit = $("#acUnit").value.trim(), role = $("#acRole").value, han = $("#acHan").value;
+    const email = AC_EDIT || toEmail(raw), isGoogle = !email.endsWith("@" + ACCT_DOMAIN);
+    const cats = role === "quan-tri" ? ["*"] : acCats.get();
+    const err = m => { $("#acErr").textContent = m; };
+    if (!AC_EDIT) {
+      if (!raw) return err("Nhập tên đăng nhập hoặc email Google.");
+      if (!isGoogle && !/^[a-z0-9._-]{3,30}@/.test(email)) return err("Tên đăng nhập 3–30 ký tự: chữ không dấu, số, dấu chấm, gạch ngang, gạch dưới.");
+      if (!isGoogle && pw.length < 6) return err("Tài khoản tên đăng nhập cần mật khẩu khởi tạo ít nhất 6 ký tự.");
+      if (pw && pw.length < 6) return err("Mật khẩu cần ít nhất 6 ký tự.");
+      if (AC.find(x => x.id === email)) return err("Tài khoản này đã có trong danh sách; bấm Sửa để đổi quyền.");
+    }
+    if (!name) return err("Nhập họ và tên.");
+    if (!cats.length) return err("Chọn ít nhất một danh mục.");
+    if (han && han < todayISO()) return err("Hạn sử dụng phải từ hôm nay trở đi.");
+    err(""); const btn = $("#acGo"); btn.disabled = true; const notes = [];
+    try {
+      if (!AC_EDIT && pw) {
+        try { await createAuthUser(email, pw); }
+        catch (x) {
+          if (x.code === "auth/email-already-in-use") notes.push("Tên đăng nhập đã có trong hệ thống đăng nhập: giữ mật khẩu cũ.");
+          else if (x.code === "auth/operation-not-allowed") throw new Error("Firebase chưa bật đăng nhập Email/Mật khẩu (Authentication → Sign-in method).");
+          else if (x.code === "auth/weak-password") throw new Error("Mật khẩu quá yếu (ít nhất 6 ký tự).");
+          else throw x;
+        }
+      }
+      const data = { email, username: showName(email), name, unit, role, cats, han: han || "", hanTs: han ? Timestamp.fromDate(new Date(han + "T23:59:59+07:00")) : null, login: pw || (AC_EDIT && (AC.find(x => x.id === AC_EDIT) || {}).login === "matkhau") ? "matkhau" : "google", ...(AC_EDIT ? { updated: new Date().toISOString() } : { created: new Date().toISOString(), by: user && user.email || "", disabled: false }) };
+      await setDoc(doc(db, "pnd_accounts", email), data, { merge: !!AC_EDIT });
+      if (!AC_EDIT && $("#acDrive").checked && !$("#acDriveWrap").hidden && settings && settings.rootId) {
+        try {
+          await drive(`https://www.googleapis.com/drive/v3/files/${settings.rootId}/permissions?sendNotificationEmail=false&supportsAllDrives=true`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "writer", type: "user", emailAddress: email }) });
+          notes.push("Đã cấp quyền chỉnh sửa thư mục PND trên Drive cho " + email + ".");
+        } catch (x) { notes.push("Chưa cấp được quyền Drive: " + x.message); }
+      }
+      await logAct(AC_EDIT ? "ACCT_EDIT" : "ACCT_NEW", email + " · " + role);
+      $("#acMsg").textContent = (AC_EDIT ? "Đã cập nhật tài khoản " : "Đã cấp tài khoản ") + showName(email) + ". " + (!AC_EDIT ? (isGoogle && !pw ? "Người dùng bấm “Đăng nhập bằng Google” với email này." : "Đăng nhập bằng tên “" + showName(email) + "” và mật khẩu vừa đặt.") : "") + (notes.length ? " " + notes.join(" ") : "");
+      acStop(); acList();
+    } catch (x) { err(x.message); } finally { btn.disabled = false; }
+  };
+  acList();
+
+  /* --- Mã truy cập dùng chung --- */
+  const maCats = bindCats("maCat", "maAll");
+  const d6 = new Date(); d6.setMonth(d6.getMonth() + 6); const def = d6.getFullYear() + "-" + pad(d6.getMonth() + 1) + "-" + pad(d6.getDate());
+  $("#maHan").value = def;
   let EDIT = null, LIST = [];
-  const setCats = cs => { const all = !cs || !cs.length || cs.includes("*"); $("#maAll").checked = all; document.querySelectorAll(".maCat").forEach(x => { x.disabled = all; x.checked = !all && cs.includes(x.value); }); };
-  $("#maAll").onchange = () => document.querySelectorAll(".maCat").forEach(x => { x.disabled = $("#maAll").checked; if (x.disabled) x.checked = false; });
-  const stop = () => { EDIT = null; $("#maForm").reset(); $("#maHan").value = def; $("#maCode").readOnly = false; setCats(["*"]); $("#maGo").textContent = "Cấp mã"; $("#maCancel").hidden = true; };
+  const stop = () => { EDIT = null; $("#maForm").reset(); $("#maHan").value = def; $("#maCode").readOnly = false; maCats.set(["*"]); $("#maGo").textContent = "Cấp mã"; $("#maCancel").hidden = true; };
   $("#maCancel").onclick = stop;
   async function list() {
     try {
       const snap = await getDocs(collection(db, "pnd_ma")); LIST = [];
       for (const d of snap.docs) { const x = d.data(); LIST.push({ code: d.id, ...x, used: (await getDocs(collection(db, "pnd_ma", d.id, "luot"))).size }); }
       LIST.sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")));
-      $("#maCount").textContent = LIST.length ? "(" + LIST.length + " mã)" : "";
       const t = todayISO();
-      $("#maBody").innerHTML = LIST.length ? LIST.map(x => { const exp = t > x.han, full = x.max && x.used >= x.max; const cs = !x.cats || x.cats.includes("*") ? "Tất cả" : x.cats.map(k => CAT[k] ? CAT[k].name : k).join(", ");
-        return `<tr><td><b>${esc(x.code)}</b></td><td>${esc(x.note || "")}</td><td>${esc(cs)}</td><td>${fmtDate(x.han)}</td><td>${Math.min(x.used, x.max || x.used)} / ${x.max || "—"}</td><td>${exp ? '<span class="badge bad">Hết hạn</span>' : full ? '<span class="badge bad">Đủ người</span>' : '<span class="badge ok">Hiệu lực</span>'}</td><td style="white-space:nowrap"><button type="button" class="btn" data-maedit="${esc(x.code)}">Sửa</button> <button type="button" class="btn" data-madel="${esc(x.code)}">Xóa</button></td></tr>`; }).join("")
-        : '<tr><td colspan="7" class="muted">Chưa có mã nào.</td></tr>';
-      $("#maBody").querySelectorAll("[data-maedit]").forEach(b => b.onclick = () => { const x = LIST.find(y => y.code === b.dataset.maedit); EDIT = x.code; $("#maCode").value = x.code; $("#maCode").readOnly = true; $("#maMax").value = x.max || 20; $("#maHan").value = x.han; $("#maNote").value = x.note || ""; setCats(x.cats); $("#maGo").textContent = "Lưu thay đổi"; $("#maCancel").hidden = false; $("#maForm").scrollIntoView({ behavior: "smooth" }); });
+      $("#maBody").innerHTML = LIST.length ? LIST.map(x => { const exp = t > x.han, full = x.max && x.used >= x.max;
+        return `<tr><td><b>${esc(x.code)}</b></td><td>${esc(x.note || "")}</td><td>${esc((ROLES[x.role || "chuyen-muc"] || {}).name || "")}</td><td>${esc(catsText(x.cats))}</td><td>${fmtDate(x.han)}</td><td>${Math.min(x.used, x.max || x.used)} / ${x.max || "—"}</td><td>${exp ? '<span class="badge bad">Hết hạn</span>' : full ? '<span class="badge bad">Đủ người</span>' : '<span class="badge ok">Hiệu lực</span>'}</td><td style="white-space:nowrap"><button type="button" class="btn sm" data-maedit="${esc(x.code)}">Sửa</button> <button type="button" class="btn sm" data-madel="${esc(x.code)}">Xóa</button></td></tr>`; }).join("")
+        : '<tr><td colspan="8" class="muted">Chưa có mã nào.</td></tr>';
+      $("#maBody").querySelectorAll("[data-maedit]").forEach(b => b.onclick = () => { const x = LIST.find(y => y.code === b.dataset.maedit); EDIT = x.code; $("#maCode").value = x.code; $("#maCode").readOnly = true; $("#maRole").value = x.role || "chuyen-muc"; $("#maMax").value = x.max || 20; $("#maHan").value = x.han; $("#maNote").value = x.note || ""; maCats.set(x.cats); $("#maGo").textContent = "Lưu thay đổi"; $("#maCancel").hidden = false; $("#maForm").scrollIntoView({ behavior: "smooth" }); });
       $("#maBody").querySelectorAll("[data-madel]").forEach(b => b.onclick = async () => {
         if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Bấm lần nữa để xóa"; setTimeout(() => { if (b.isConnected) { b.dataset.armed = ""; b.textContent = "Xóa"; } }, 4000); return; }
         b.disabled = true; const code = b.dataset.madel;
         try { const ops = []; (await getDocs(collection(db, "pnd_ma", code, "luot"))).forEach(d => ops.push({ type: "del", ref: d.ref })); ops.push({ type: "del", ref: doc(db, "pnd_ma", code) }); await commitOps(ops); await logAct("CODE_DEL", code); $("#maMsg").textContent = "Đã xóa mã " + code + "."; list(); }
         catch (x) { $("#maErr").textContent = x.message; b.disabled = false; }
       });
-    } catch (x) { $("#maBody").innerHTML = `<tr><td colspan="7" class="err">Chưa tải được danh sách: ${esc(x.message)}</td></tr>`; }
+    } catch (x) { $("#maBody").innerHTML = `<tr><td colspan="8" class="err">Chưa tải được danh sách: ${esc(x.message)}</td></tr>`; }
   }
   $("#maForm").onsubmit = async e => {
     e.preventDefault();
-    const code = norm($("#maCode").value), max = parseInt($("#maMax").value, 10), han = $("#maHan").value, note = $("#maNote").value.trim();
-    const all = $("#maAll").checked, cats = all ? ["*"] : [...document.querySelectorAll(".maCat:checked")].map(x => x.value);
+    const code = norm($("#maCode").value), max = parseInt($("#maMax").value, 10), han = $("#maHan").value, note = $("#maNote").value.trim(), role = $("#maRole").value;
+    const cats = maCats.get();
     if (!okCode(code)) { $("#maErr").textContent = "Mã gồm 3–24 ký tự: chữ không dấu, chữ số, gạch ngang hoặc gạch dưới."; return; }
+    if (role === "quan-tri" || role === "bien-muc") { $("#maErr").textContent = "Mã dùng chung không cấp quyền tải lên hay quản trị; hãy tạo tài khoản cá nhân cho vai trò này."; return; }
     if (!(max >= 1 && max <= 1000)) { $("#maErr").textContent = "Số người từ 1 đến 1000."; return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(han) || han < todayISO()) { $("#maErr").textContent = "Chọn ngày hết hạn từ hôm nay trở đi."; return; }
     if (!cats.length) { $("#maErr").textContent = "Chọn ít nhất một danh mục."; return; }
@@ -902,19 +1430,112 @@ async function renderAccounts() {
       const ref = doc(db, "pnd_ma", code);
       if (!EDIT && (await getDoc(ref)).exists()) throw new Error("Mã này đã có; hãy đặt mã khác.");
       const hanTs = Timestamp.fromDate(new Date(han + "T23:59:59+07:00"));
-      await setDoc(ref, { note, han, hanTs, max, cats, ...(EDIT ? { updated: new Date().toISOString() } : { created: new Date().toISOString() }) }, { merge: !!EDIT });
-      await logAct(EDIT ? "CODE_EDIT" : "CODE_NEW", code);
+      await setDoc(ref, { note, han, hanTs, max, cats, role, ...(EDIT ? { updated: new Date().toISOString() } : { created: new Date().toISOString() }) }, { merge: !!EDIT });
+      await logAct(EDIT ? "CODE_EDIT" : "CODE_NEW", code + " · " + role);
       $("#maMsg").textContent = (EDIT ? "Đã cập nhật mã " : "Đã cấp mã ") + code + "."; stop(); list();
     } catch (x) { $("#maErr").textContent = x.message; } finally { $("#maGo").disabled = false; }
   };
   list();
 }
 
+/* ---------- Quản lý thư mục: cây nhiều cấp, mức truy cập mặc định ---------- */
+const lvOpts = (cur, inherit) => (inherit ? `<option value=""${!cur ? " selected" : ""}>Kế thừa thư mục cha</option>` : "") + LEVELS.map(l => `<option value="${l.key}"${l.key === cur ? " selected" : ""}>${esc(l.name)} — ${esc(l.desc)}</option>`).join("");
+function renderFolders() {
+  if (!canUp()) {
+    $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ THƯ MỤC</h2><p class="empty">Chỉ Thủ thư / Biên mục và Quản trị viên được quản lý thư mục.</p>${navRow()}</section>`;
+    return;
+  }
+  const rows = [];
+  for (const c of visibleCats()) {
+    const rootId = catRootId(c.key); if (!rootId || !tree[rootId]) continue;
+    const walk = (id, lvl) => {
+      const n = tree[id]; if (!n) return;
+      const own = n.access, eff = folderLevel(id), cnt = countFiles(id);
+      rows.push(`<tr class="${lvl === 0 ? "root" : ""}"><td><span class="tree-name" style="padding-left:${lvl * 20}px">${lvl === 0 ? `<span class="dot" style="background:${c.color[0]}"></span>` : "└ "}<a data-folder="${esc(id)}">${esc(lvl === 0 ? c.name : n.name)}</a></span>${n.desc ? `<br><span class="muted" style="padding-left:${lvl * 20 + 16}px">${esc(n.desc)}</span>` : ""}</td>
+        <td>${lvChip(eff, own ? "" : " · kế thừa")}</td><td class="c">${cnt}</td>
+        <td class="ftbl-act"><button type="button" class="btn sm" title="Thêm thư mục con" data-fnew="${esc(id)}">＋ Con</button><button type="button" class="btn sm" title="Mức truy cập" data-flevel="${esc(id)}">Quyền</button>${n.depth >= 2 ? `<button type="button" class="btn sm" data-fren="${esc(id)}">Đổi tên</button><button type="button" class="btn sm" data-movefolder="${esc(id)}">Chuyển</button><button type="button" class="btn sm" data-fimg="${esc(id)}">Bìa</button><button type="button" class="btn sm" data-fdesc="${esc(id)}">Mô tả</button><button type="button" class="btn sm danger" data-fdel="${esc(id)}">Xóa</button>` : ""}</td></tr>`);
+      sortFolders(childrenOf(id)).forEach(k => walk(k.id, lvl + 1));
+    };
+    walk(rootId, 0);
+  }
+  $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ THƯ MỤC</h2>
+    <div class="crumbs"><a data-home>Trang chủ</a><span class="sep">/</span><span>Quản lý thư mục</span></div>
+    <form id="fnForm" class="panel-form" novalidate>
+      <h3 class="grp-title" style="margin-top:0">Thêm thư mục</h3>
+      <div class="grid2">
+        <label class="fld"><span>Tên thư mục *</span><input id="fnName" placeholder="Ví dụ: Luật Đất đai 2024 và các văn bản hướng dẫn thi hành"></label>
+        <label class="fld"><span>Nằm trong thư mục</span><select id="fnParent">${allFolderOptions()}</select></label>
+        <label class="fld"><span>Mức truy cập mặc định</span><select id="fnLevel">${lvOpts("", true)}</select></label>
+        <label class="fld"><span>Mô tả ngắn</span><input id="fnDesc" maxlength="160"></label>
+      </div>
+      <p class="err" id="fnErr"></p>
+      <div class="dlg-act"><button type="submit" class="btn primary" id="fnGo">Thêm thư mục</button></div>
+    </form>
+    <h3 class="grp-title">Cây thư mục</h3>
+    <div class="tbl-wrap"><table class="adm-table ftbl"><thead><tr><th>Thư mục</th><th>Mức truy cập</th><th>Tài liệu</th><th>Thao tác</th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="4" class="muted">Chưa có cây thư mục.</td></tr>'}</tbody></table></div>
+    <p class="muted">Mức truy cập của thư mục là mức mặc định cho tài liệu tải vào thư mục đó và các thư mục con chưa đặt riêng. Khi đổi mức, có thể áp dụng luôn cho các tài liệu đang có bên trong. Thư mục cũng được tạo, đổi tên, chuyển và xóa (vào Thùng rác) trên Google Drive.</p>
+    ${navRow()}</section>`;
+  const h = decodeURIComponent(location.hash.slice(1));
+  void h;
+  $("#fnForm").onsubmit = async e => {
+    e.preventDefault();
+    const name = $("#fnName").value.trim(), parent = $("#fnParent").value, lv = $("#fnLevel").value, desc = $("#fnDesc").value.trim();
+    if (!name) { $("#fnErr").textContent = "Nhập tên thư mục."; return; }
+    if (!tree[parent]) { $("#fnErr").textContent = "Chọn thư mục cha."; return; }
+    $("#fnErr").textContent = ""; $("#fnGo").disabled = true;
+    try {
+      const p = tree[parent], f = await createFolder(name, parent);
+      const node = { id: f.id, name: f.name, parent, cat: p.cat, depth: p.depth + 1, ...(lv ? { access: lv } : {}), ...(desc ? { desc } : {}) };
+      await setDoc(doc(db, "pnd_tree", f.id), node); tree[f.id] = node;
+      await logAct("FOLDER_NEW", name); toast("Đã tạo thư mục “" + name + "”.", "ok"); route();
+    } catch (x) { $("#fnErr").textContent = "Chưa tạo được thư mục: " + x.message; } finally { $("#fnGo").disabled = false; }
+  };
+}
+async function setFolderLevel(id) {
+  const n = tree[id]; if (!n || !canUp()) return;
+  const label = n.depth <= 1 ? CAT[n.cat].name : n.name;
+  const lv = await ask("Mức truy cập mặc định của thư mục “" + label + "” (hiện tại: " + LV[folderLevel(id)].name + (n.access ? "" : ", kế thừa") + ").", { title: "MỨC TRUY CẬP THƯ MỤC", options: lvOpts(n.access || "", n.depth >= 2), ok: "Lưu" });
+  if (lv === null) return;
+  if (lv === "mat" && !isAdmin) { toast("Chỉ quản trị viên được đặt mức Mật.", "err"); return; }
+  try {
+    await setDoc(doc(db, "pnd_tree", id), { access: lv || "" }, { merge: true });
+    if (lv) n.access = lv; else delete n.access;
+    const eff = folderLevel(id), ids = subtreeIds(id);
+    const inside = Object.values(items).filter(f => ids.includes(f.parent) && levelOf(f) !== eff);
+    if (inside.length && await ask("Áp dụng mức “" + LV[eff].name + "” cho " + inside.length + " tài liệu đang nằm trong thư mục này (và thư mục con)?", { title: "ÁP DỤNG CHO TÀI LIỆU", ok: "Áp dụng" })) {
+      await commitOps(inside.map(f => ({ type: "merge", ref: doc(db, "pnd_items", f.id), data: { access: eff } })));
+      inside.forEach(f => f.access = eff);
+      if (eff === "mat") await offerUnshare(inside);
+    }
+    await logAct("FOLDER_LEVEL", label + " → " + (lv || "kế thừa"));
+    toast("Đã đặt mức truy cập cho “" + label + "”.", "ok"); route();
+  } catch (x) { toast("Chưa lưu được: " + x.message, "err"); }
+}
+/* Tài liệu chuyển sang Mật: đề nghị tắt chia sẻ “bất kỳ ai có link” trên Drive */
+async function offerUnshare(list) {
+  const shared = list.filter(f => driveIdOf(f) && f.shared !== false);
+  if (!shared.length) return;
+  if (!await ask("Tắt chia sẻ “Bất kỳ ai có đường liên kết” trên Google Drive cho " + shared.length + " tệp Mật? Nếu không tắt, ai đã có đường link vẫn mở được tệp.", { title: "TÀI LIỆU MẬT", ok: "Tắt chia sẻ" })) return;
+  let ok = 0;
+  for (const f of shared) {
+    try { await drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}/permissions/anyoneWithLink?supportsAllDrives=true`, { method: "DELETE" }); f.shared = false; await setDoc(doc(db, "pnd_items", f.id), { shared: false }, { merge: true }); ok++; }
+    catch (e) { console.warn("tắt chia sẻ", f.name, e.message); }
+  }
+  toast("Đã tắt chia sẻ link cho " + ok + "/" + shared.length + " tệp.", ok === shared.length ? "ok" : "err");
+}
+async function setFolderDesc(id) {
+  const n = tree[id]; if (!n) return;
+  const d = await ask("Mô tả ngắn cho thư mục “" + n.name + "”.", { title: "MÔ TẢ THƯ MỤC", input: "Mô tả", value: n.desc || "", ok: "Lưu" });
+  if (d === null) return;
+  try { await setDoc(doc(db, "pnd_tree", id), { desc: d }, { merge: true }); n.desc = d; route(); } catch (x) { toast("Chưa lưu được: " + x.message, "err"); }
+}
+
+
 /* ---------- Hỏi AI (Gemini qua Firebase AI Logic) ---------- */
 let aiChat = null;
 function aiAdd(cls, text) { const p = document.createElement("div"); p.className = "ai-msg " + cls; p.textContent = text; $("#aiLog").appendChild(p); $("#aiLog").scrollTop = 1e9; return p; }
 function contextText() {
-  const lines = Object.values(items).filter(f => canCat(f.cat)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
+  const lines = Object.values(items).filter(f => canSee(f)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
   return lines.length ? lines.join("\n") : "(chưa có tài liệu nào trong phạm vi người dùng được xem)";
 }
 async function getChat() {
@@ -931,7 +1552,7 @@ async function getChat() {
   return aiChat;
 }
 function openAI() {
-  if (!isAdmin && !session) { openLogin("Nhập mã tài khoản để dùng trợ lý AI."); return; }
+  if (!myGrant()) { openLogin("Đăng nhập (tài khoản hoặc mã truy cập) để dùng trợ lý AI."); return; }
   if (!$("#aiLog").children.length) aiAdd("bot", "Xin chào! Bạn muốn tìm tài liệu hay hỏi điều gì?");
   $("#dlgAI").showModal(); setTimeout(() => $("#aiInput").focus(), 50);
 }
@@ -948,7 +1569,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-close],[data-image-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -956,46 +1577,74 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-back")) { e.preventDefault(); history.length > 1 ? history.back() : go(""); }
   else if (t.dataset.go) { e.preventDefault(); go(t.dataset.go); }
   else if (t.hasAttribute("data-login")) openLogin();
-  else if (t.hasAttribute("data-adminlogin")) { openLogin(); setLoginTab("admin"); }
-  else if (t.dataset.edit) openEdit(t.dataset.edit);
-  else if (t.dataset.move) moveTo(t.dataset.move, false);
+  else if (t.hasAttribute("data-adminlogin")) openLogin("Đăng nhập bằng tài khoản quản trị.");
+  else if (t.dataset.edit) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openEdit(t.dataset.edit); }
+  else if (t.dataset.move) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); moveTo(t.dataset.move, false); }
+  else if (t.dataset.doc) { e.preventDefault(); openDoc(t.dataset.doc); }
+  else if (t.dataset.view) { view = t.dataset.view; try { localStorage.setItem("pnd_view", view); } catch (x) {} route(); }
+  else if (t.hasAttribute("data-freset")) { filt = { year: "", fmt: "", status: "", sort: "" }; route(); }
   else if (t.dataset.movefolder) moveTo(t.dataset.movefolder, true);
   else if (t.dataset.upload) openUpload(t.dataset.upload);
   else if (t.dataset.fnew) newFolder(t.dataset.fnew);
   else if (t.dataset.fren) renameFolder(t.dataset.fren);
   else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
   else if (t.dataset.fimg) setFolderImage(t.dataset.fimg);
-  else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
+  else if (t.dataset.flevel) setFolderLevel(t.dataset.flevel);
+  else if (t.dataset.fdesc) setFolderDesc(t.dataset.fdesc);
+  else if (t.dataset.star) { const f = items[t.dataset.star]; if (f) openDoc(f.id); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
-$("#btnLogin").onclick = () => openLogin("Nhập mã tài khoản do giảng viên cấp để xem tài liệu.");
-$("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguyên Digital trên máy này?")) return; saveSession(null); saveTok(null); aiChat = null; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
+$("#btnLogin").onclick = () => openLogin();
+$("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguyên Digital trên máy này?")) return; saveSession(null); saveTok(null); acct = null; aiChat = null; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
+$("#btnPw").onclick = async () => {
+  const pw = await ask("Đặt mật khẩu mới cho tài khoản đang đăng nhập (ít nhất 6 ký tự).", { title: "ĐỔI MẬT KHẨU", input: "Mật khẩu mới", ok: "Đổi mật khẩu" });
+  if (!pw) return;
+  try { await updatePassword(auth.currentUser, pw); toast("Đã đổi mật khẩu.", "ok"); }
+  catch (x) { toast(x.code === "auth/requires-recent-login" ? "Cần đăng nhập lại rồi đổi mật khẩu ngay." : x.code === "auth/weak-password" ? "Mật khẩu cần ít nhất 6 ký tự." : "Chưa đổi được: " + x.message, "err"); }
+};
+async function googleLogin() {
+  const prov = new GoogleAuthProvider();
+  prov.setCustomParameters({ prompt: "select_account" });
+  await signInWithPopup(auth, prov);
+}
+const loginErrText = x => /auth\/(invalid-credential|wrong-password|user-not-found|invalid-email|invalid-login-credentials)/.test(x.code || "") ? "Tên đăng nhập hoặc mật khẩu chưa đúng." : x.code === "auth/user-disabled" ? "Tài khoản đã bị khóa." : x.code === "auth/too-many-requests" ? "Đăng nhập sai nhiều lần; hãy thử lại sau ít phút." : x.code === "auth/popup-blocked" ? "Trình duyệt chặn cửa sổ đăng nhập. Hãy cho phép cửa sổ bật lên rồi thử lại." : x.code === "auth/popup-closed-by-user" ? "Cửa sổ đăng nhập đã bị đóng." : (x.message || "Chưa đăng nhập được.");
+$("#btnGoogle").onclick = async () => {
+  $("#loginErr").textContent = "Đang mở cửa sổ đăng nhập Google…";
+  try { await googleLogin(); $("#dlgLogin").close(); $("#loginErr").textContent = ""; toast("Đã đăng nhập.", "ok"); }
+  catch (x) { $("#loginErr").textContent = loginErrText(x); }
+};
 $("#loginForm").onsubmit = async e => {
-  e.preventDefault(); const btn = $("#loginGo"); btn.disabled = true; $("#loginErr").textContent = loginTab === "admin" ? "Đang mở cửa sổ đăng nhập Google…" : "Đang kiểm tra mã…";
+  e.preventDefault(); const btn = $("#loginGo"); btn.disabled = true; $("#loginErr").textContent = loginTab === "acct" ? "Đang đăng nhập…" : "Đang kiểm tra mã…";
   try {
-    if (loginTab === "admin") {
+    if (loginTab === "acct") {
       const em = $("#admEmail").value.trim(), pw = $("#admPass").value;
-      if (em && pw) { const r = await signInWithEmailAndPassword(auth, em, pw); if (!isAdminUser(r.user)) { await signOut(auth); throw new Error("Tài khoản này không phải quản trị."); } }
-      else await adminLogin();
+      if (!em || !pw) throw new Error("Nhập tên đăng nhập và mật khẩu, hoặc bấm “Đăng nhập bằng Google”.");
+      await signInWithEmailAndPassword(auth, toEmail(em), pw);   // quyền được nạp trong afterAuth
     }
-    else { await useCode($("#codeInput").value); await loadItems(); await loadLive(); }
-    $("#dlgLogin").close(); $("#loginErr").textContent = "";
-    toast(loginTab === "admin" ? "Đã đăng nhập quản trị." : "Đã xác nhận mã tài khoản.", "ok");
+    else { await useCode($("#codeInput").value); await loadItems(); }
+    $("#dlgLogin").close(); $("#loginErr").textContent = ""; $("#admPass").value = "";
+    toast(loginTab === "acct" ? "Đã đăng nhập." : "Đã xác nhận mã truy cập.", "ok");
     route();
-  } catch (x) { $("#loginErr").textContent = /auth\/(invalid-credential|wrong-password|user-not-found|invalid-email)/.test(x.code || "") ? "Email hoặc mật khẩu chưa đúng." : x.code === "auth/popup-blocked" ? "Trình duyệt chặn cửa sổ đăng nhập. Hãy cho phép cửa sổ bật lên rồi thử lại." : x.code === "auth/popup-closed-by-user" ? "Cửa sổ đăng nhập đã bị đóng." : (x.message || "Chưa đăng nhập được."); }
+  } catch (x) { $("#loginErr").textContent = loginErrText(x); }
   finally { btn.disabled = false; }
 };
 $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput").value.trim(); if (q) go("tim/" + encodeURIComponent(q)); };
 $("#btnUpload").onclick = () => openUpload();
 // Kéo thả tệp vào khung thư mục đang mở → mở hộp tải lên với đúng thư mục
-document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!isAdmin || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
-document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); document.querySelectorAll(".sort-over").forEach(x => x.classList.remove("sort-over")); dragItem = null; });
-document.addEventListener("dragover", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (isAdmin && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
+document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!canUp() || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
+document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); clearDropMarks(); dragItem = null; });
+document.addEventListener("dragover", e => {
+  const dt = dropTarget(e);
+  if (dt) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!dt.el.classList.contains("drop-into")) { clearDropMarks(); dt.el.classList.add("drop-into"); } return; }
+  document.querySelectorAll(".drop-into").forEach(x => x.classList.remove("drop-into"));
+  const row = e.target.closest && e.target.closest("[data-sort-id]"); if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) { e.preventDefault(); row.classList.add("sort-over"); } const z = e.target.closest && e.target.closest(".dropzone"); if (z && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); z.classList.add("drag"); } });
 document.addEventListener("dragleave", e => { const z = e.target.closest && e.target.closest(".dropzone"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("drag"); });
 document.addEventListener("drop", async e => {
+  const dt = dropTarget(e);
+  if (dt) { e.preventDefault(); const it = dragItem; clearDropMarks(); dragItem = null; await doMove(it.sortId, it.sortKind === "folder", dt.fid); return; }
   const row = e.target.closest && e.target.closest("[data-sort-id]");
-  if (isAdmin && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
+  if (canUp() && dragItem && row && row.dataset.sortKind === dragItem.sortKind && row.dataset.sortParent === dragItem.sortParent) {
     e.preventDefault(); row.classList.remove("sort-over");
     const kind = dragItem.sortKind, parent = dragItem.sortParent, movingId = dragItem.sortId, targetId = row.dataset.sortId;
     if (movingId !== targetId) {
@@ -1011,35 +1660,64 @@ $("#btnScan").onclick = () => scanDrive(false);
 $("#btnInit").onclick = initTree;
 $("#btnShare").onclick = shareAll;
 $("#btnSource").onclick = addSource;
-$("#upCat").onchange = () => { $("#upFolder").innerHTML = folderOptions($("#upCat").value); };
-document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => setUpMode(b.dataset.up));
-$("#upFiles").onchange = () => { upFilesSel = [...$("#upFiles").files]; $("#dropText").textContent = upFilesSel.length ? upFilesSel.map(f => f.name).join(", ") : "Kéo thả tệp vào đây hoặc bấm để chọn"; };
+$("#upFolder").onchange = upFolderChanged;
+$("#upAccess").onclick = e => { const b = e.target.closest("[data-lv]"); if (b) setUpLevel(b.dataset.lv, true); };
+$("#upFiles").onchange = () => { addUpFiles($("#upFiles").files); $("#upFiles").value = ""; };
+$("#upList").onclick = e => { const b = e.target.closest("[data-rmfile]"); if (!b) return; e.preventDefault(); upFilesSel.splice(+b.dataset.rmfile, 1); if (!upFilesSel.length) { $("#upName").value = ""; $("#upAuto").textContent = ""; } renderUpList(); };
+$("#upLinks").oninput = renderUpList;
+$("#upName").onchange = () => applyAuto($("#upName").value);
 const dropEl = $("#drop");
 dropEl.ondragover = e => { e.preventDefault(); dropEl.classList.add("drag"); };
 dropEl.ondragleave = () => dropEl.classList.remove("drag");
-dropEl.ondrop = e => { e.preventDefault(); dropEl.classList.remove("drag"); upFilesSel = [...e.dataTransfer.files]; $("#dropText").textContent = upFilesSel.map(f => f.name).join(", "); };
+dropEl.ondrop = e => { e.preventDefault(); dropEl.classList.remove("drag"); const txt = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain"); if (e.dataTransfer.files.length) addUpFiles(e.dataTransfer.files); else if (txt && isWebUrl(txt.trim().split(/\s+/)[0])) { $("#upLinks").value = ($("#upLinks").value ? $("#upLinks").value + "\n" : "") + txt.trim(); renderUpList(); } };
 $("#upForm").onsubmit = submitUpload;
 $("#edForm").onsubmit = submitEdit;
 $("#aiForm").onsubmit = askAI;
 $("#aiInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#aiForm").requestSubmit(); } });
 window.addEventListener("hashchange", route);
+document.addEventListener("change", e => { const s = e.target.closest && e.target.closest("[data-filt]"); if (s) { filt[s.dataset.filt] = s.value; route(); } });
 
 /* ---------- Khởi động ---------- */
 async function afterAuth() {
-  isAdmin = isAdminUser(user);
+  acct = null;
+  if (user && !user.isAnonymous && user.email) {
+    try { const a = await getDoc(doc(db, "pnd_accounts", user.email.toLowerCase())); if (a.exists()) acct = { id: a.id, ...a.data() }; } catch (e) { console.warn("tài khoản", e.message); }
+  }
+  isAdmin = isAdminUser(user) || !!(acct && grantOk(acct) && acct.role === "quan-tri");
+  if (user && !user.isAnonymous && !isAdmin) {
+    if (!acct) toast("Tài khoản " + showName(user.email) + " chưa được cấp quyền trong thư viện; đang xem như khách.", "err");
+    else if (!grantOk(acct)) toast("Tài khoản đã bị khóa hoặc hết hạn sử dụng.", "err");
+  }
   if (!isAdmin && session && user) {
-    // Bảo đảm tài khoản ẩn danh hiện tại đã ghi mã (khi trình duyệt xóa dữ liệu đăng nhập)
-    try { const u = await getDoc(doc(db, "pnd_users", user.uid)); if (!u.exists() || u.data().code !== session.code) await useCode(session.code); }
+    // Bảo đảm phiên hiện tại đã ghi mã và lấy lại quyền mới nhất của mã
+    try {
+      const u = await getDoc(doc(db, "pnd_users", user.uid)); if (!u.exists() || u.data().code !== session.code) await useCode(session.code);
+      const m = await getDoc(doc(db, "pnd_ma", session.code));
+      if (m.exists()) { const x = m.data(); saveSession({ ...session, han: x.han, role: x.role || "chuyen-muc", cats: Array.isArray(x.cats) && x.cats.length ? x.cats : ["*"] }); }
+    }
     catch (e) { if (e.invalidCode) { saveSession(null); toast(e.message + " Hãy nhập mã mới.", "err"); } }
   }
   await loadItems();
-  // Hiện ngay bản đã lưu trên máy, rồi đọc lại Drive
-  try { const c = JSON.parse(localStorage.getItem("pnd_live2") || "null"); if (c && c.who === (isAdmin ? "admin" : session && session.code) && Date.now() - c.t < 6 * 3600e3) { Object.assign(tree, c.tree); for (const [id, it] of Object.entries(c.items)) items[id] = { ...it, ...(items[id] || {}) }; } } catch (e) {}
-  if (await loadLive()) { try { localStorage.setItem("pnd_live2", JSON.stringify({ t: Date.now(), who: isAdmin ? "admin" : session && session.code, tree, items })); } catch (e) {} }
+  if (isAdmin) await migrateAccess();
+  // Người quản lý: hiện ngay bản đã lưu trên máy, rồi đọc lại Drive
+  const who = canUp() ? (isAdmin ? "admin" : "up:" + (user && user.uid)) : null;
+  if (who) {
+    try { const c = JSON.parse(localStorage.getItem("pnd_live2") || "null"); if (c && c.who === who && Date.now() - c.t < 6 * 3600e3) { Object.assign(tree, c.tree); for (const [id, it] of Object.entries(c.items)) items[id] = { ...it, ...(items[id] || {}) }; } } catch (e) {}
+    if (await loadLive()) { try { localStorage.setItem("pnd_live2", JSON.stringify({ t: Date.now(), who, tree, items })); } catch (e) {} }
+  }
   authReady = true;
-  if (isAdmin && liveState === "private") $("#adminNote").textContent = "Thư mục gốc PND chưa chia sẻ “Bất kỳ ai có đường liên kết”: người dùng mã chưa xem được tài liệu.";
-  const dl = $("#dlgLogin"); if (dl.open && (isAdmin || session)) dl.close();
+  const dl = $("#dlgLogin"); if (dl.open && myGrant()) dl.close();
   route();
+}
+/* Tài liệu cũ chưa có mức truy cập: gán theo thư mục (mặc định Nội bộ — giữ đúng như trước) */
+async function migrateAccess() {
+  const miss = Object.values(items).filter(f => !f.access);
+  if (!miss.length) return;
+  try {
+    await commitOps(miss.map(f => ({ type: "merge", ref: doc(db, "pnd_items", f.id), data: { access: folderLevel(f.parent) } })));
+    miss.forEach(f => f.access = folderLevel(f.parent));
+    console.info("Đã gán mức truy cập cho " + miss.length + " tài liệu.");
+  } catch (e) { console.warn("gán mức truy cập", e.message); }
 }
 route();
 onAuthStateChanged(auth, async u => {
