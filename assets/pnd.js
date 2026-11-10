@@ -119,6 +119,34 @@ function cover(icon, colors, label) {
   return `<svg viewBox="0 0 160 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="160" height="120" fill="url(#${id})"/><circle cx="140" cy="16" r="34" fill="#fff" opacity=".08"/><circle cx="14" cy="110" r="26" fill="#fff" opacity=".07"/>${ICONS[icon] || ICONS.folder}${tag}</svg>`;
 }
 
+/* ---------- Định dạng tệp, bìa sách, kích thước ---------- */
+const FMT = { pdf: ["PDF", "PDF"], word: ["Word / Văn bản", "DOC"], excel: ["Excel / Bảng tính", "XLS"], ppt: ["PowerPoint / Trình chiếu", "PPT"], image: ["Hình ảnh", "ẢNH"], media: ["Video / Âm thanh", "MEDIA"], link: ["Liên kết web", "LINK"], khac: ["Tệp khác", "FILE"] };
+function driveIdFrom(s) {
+  s = String(s || "").trim();
+  const m = s.match(/(?:drive|docs)\.google\.com\/.*?(?:\/d\/|folders\/|[?&]id=)([\w-]{20,})/) || s.match(/^([\w-]{25,})$/);
+  return m ? m[1] : "";
+}
+function driveIdOf(f) { return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
+function fmtOf(f) {
+  const m = String(f.fmime || f.mime || ""), ext = (String(f.name || "").toLowerCase().match(/\.([a-z0-9]{2,5})$/) || [])[1] || "";
+  if (m === "application/pdf" || ext === "pdf") return "pdf";
+  if (/wordprocessing|msword|google-apps\.document|opendocument\.text/.test(m) || /^(docx?|odt|rtf)$/.test(ext)) return "word";
+  if (/spreadsheet|ms-excel|google-apps\.spreadsheet|text\/csv/.test(m) || /^(xlsx?|ods|csv)$/.test(ext)) return "excel";
+  if (/presentation|powerpoint|google-apps\.presentation/.test(m) || /^(pptx?|odp)$/.test(ext)) return "ppt";
+  if (/^image\//.test(m) || /^(jpe?g|png|gif|webp|bmp)$/.test(ext)) return "image";
+  if (/^(video|audio)\//.test(m) || /^(mp4|mov|mp3|wav|m4a|avi|mkv)$/.test(ext)) return "media";
+  if (m === "link") return driveIdOf(f) ? "khac" : "link";
+  return "khac";
+}
+const yearOfItem = f => yearOf(f.issued) || yearOf(f.name) || yearOf(f.modified || f.added);
+const fmtSize = n => !n ? "" : n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " KB" : (n / 1048576).toFixed(1).replace(".", ",") + " MB";
+const stCls = s => /^Còn/.test(s) ? "on" : /một phần/.test(s) ? "mid" : /Hết/.test(s) ? "off" : "mid";
+function bookHTML(f) {
+  const cat = CAT[f.cat] || CAT.khac, k = fmtOf(f), id = driveIdOf(f);
+  const thumb = f.coverUrl || (id && f.shared !== false ? "https://drive.google.com/thumbnail?id=" + encodeURIComponent(id) + "&sz=w400" : "");
+  return `<div class="book"><span class="spine" style="background:${cat.color[0]}"></span><img class="bl" src="./assets/logo.png" alt=""><span class="bc">${esc(cat.name)}</span>${thumb ? `<img class="real" src="${esc(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="badge-ft ${k}">${FMT[k][1]}</span></div>`;
+}
+
 /* ---------- Tải dữ liệu ---------- */
 async function loadSettings() {
   try { const s = await getDoc(doc(db, "pnd_settings", "root")); settings = s.exists() ? s.data() : null; } catch (e) { settings = null; }
@@ -178,9 +206,53 @@ function pathOf(id) { const out = []; let n = tree[id], guard = 0; while (n && g
 function countFiles(id) { let n = filesOf(id).length; for (const c of childrenOf(id)) n += countFiles(c.id); return n; }
 
 /* ---------- Giao diện chung ---------- */
+function orderedKids(id) {
+  const n = tree[id], cat = n && CAT[n.cat], kids = sortFolders(childrenOf(id));
+  if (n && n.depth <= 1 && cat && cat.group) {
+    const order = Object.keys(cat.sub || {});
+    kids.sort((a, b) => { const ia = order.indexOf(a.name), ib = order.indexOf(b.name); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || vi.compare(a.name, b.name); });
+  }
+  return kids;
+}
+function catCount(key) { const r = catRootId(key); return loaded.items && canCat(key) && r && tree[r] ? countFiles(r) : null; }
 function renderNav() {
-  const cur = currentCatKey();
-  $("#catNav").innerHTML = visibleCats().map(c => `<button type="button" class="pill${cur === c.key ? " on" : ""}" data-cat="${c.key}">${c.label.length > 1 ? esc(c.label[0]) + '<span class="hl">' + esc(c.label[1]) + "</span>" : esc(c.label[0])}</button>`).join("");
+  const cur = currentCatKey(), h = decodeURIComponent(location.hash.slice(1));
+  const curPath = h.startsWith("f/") ? pathOf(h.slice(2)).map(p => p.id) : [];
+  let html = `<button type="button" class="cat home${!h ? " on" : ""}" data-home><span class="dot" style="background:var(--navy)"></span><span class="nm">Trang chủ</span></button>`;
+  for (const c of visibleCats()) {
+    const n = catCount(c.key);
+    html += `<button type="button" class="cat${cur === c.key ? " on" : ""}" data-cat="${c.key}"><span class="dot" style="background:${c.color[0]}"></span><span class="nm">${esc(c.name)}</span>${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
+    const r = catRootId(c.key);
+    if (cur === c.key && canCat(c.key) && r) {
+      const kids = orderedKids(r);
+      if (kids.length) html += `<div class="subnav">${kids.map(k => `<button type="button" class="sub${curPath.includes(k.id) ? " on" : ""}" data-folder="${esc(k.id)}"><span>${esc(k.name)}</span>${loaded.items ? `<span class="n">${countFiles(k.id)}</span>` : ""}</button>`).join("")}</div>`;
+    }
+  }
+  $("#catNav").innerHTML = html;
+  renderSide();
+}
+function renderSide() {
+  const mine = Object.values(items).filter(f => canCat(f.cat) && f.cat !== "cho");
+  const rows = [];
+  if (isAdmin || session) {
+    rows.push(["Tổng số tài liệu", loaded.items ? mine.length : "…"]);
+    rows.push(["Số thư mục", Object.values(tree).filter(n => n.depth >= 2 && n.cat !== "cho" && canCat(n.cat)).length]);
+    rows.push(["Danh mục được xem", isAdmin || session.cats.includes("*") ? PUBLIC_CATS.length : session.cats.filter(k => CAT[k]).length]);
+    rows.push(["Tài liệu thông dụng ★", thongDung.length]);
+    if (isAdmin) {
+      const drv = mine.filter(f => driveIdOf(f));
+      rows.push(["Đã mở chia sẻ xem", drv.filter(f => f.shared !== false).length + "/" + drv.length]);
+      const cho = Object.values(items).filter(f => f.cat === "cho").length;
+      if (cho) rows.push(["Chờ phân loại", cho]);
+    }
+  } else rows.push(["Danh mục thư viện", PUBLIC_CATS.length], ["Tài liệu thông dụng ★", thongDung.length]);
+  $("#stats").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join("") +
+    (!isAdmin && !session ? `<dd class="muted" style="grid-column:1/-1;text-align:left;font-weight:400;margin-top:4px">Nhập mã tài khoản để xem và tìm tài liệu. <button type="button" class="linkish" data-login>Nhập mã</button></dd>` : "");
+  const L = CFG.LINKS || {};
+  const lk = (href, icon, colors, label) => href ? `<a href="${esc(href)}" target="_blank" rel="noopener"><span class="ic">${cover(icon, colors)}</span>${esc(label)}</a>` : "";
+  $("#linkList").innerHTML = lk(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library") + lk(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work") +
+    lk(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive") + lk(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail") +
+    `<button type="button" data-go="tai-khoan"><span class="ic">${cover("key", ["#0f2945", "#2b5f8f"])}</span>Quản lý mã tài khoản</button>`;
 }
 function renderAuth() {
   document.body.classList.toggle("is-admin", isAdmin);
@@ -215,23 +287,23 @@ const go = h => { if (location.hash.slice(1) === h) route(); else location.hash 
 /* ---------- Trang chủ ---------- */
 function renderHome() {
   const stars = thongDung.filter(s => isAdmin || !CAT[s.cat] || !CAT[s.cat].adminOnly);
-  const starHTML = stars.length
-    ? `<div class="star-list">${stars.map(s => `<button type="button" class="star-item" data-star="${esc(s.id)}"><span class="st">★</span><span>${esc(s.name)}<small>${esc(CAT[s.cat] ? CAT[s.cat].name : "")}</small></span></button>`).join("")}</div>`
-    : `<p class="empty">Tài liệu được đánh dấu ★ sẽ hiện ở đây.${isAdmin ? " (Đánh dấu khi tải lên hoặc bấm Sửa ở bảng tài liệu.)" : ""}</p>`;
-  const L = CFG.LINKS || {};
-  const tile = (href, icon, colors, label, ext) => `<a class="ltile" href="${esc(href)}"${ext ? ' target="_blank" rel="noopener"' : ""}><span class="lv">${cover(icon, colors)}</span><span>${esc(label)}</span></a>`;
+  const starDocs = stars.map(s => items[s.id]).filter(f => f && canCat(f.cat));
+  const starHTML = starDocs.length
+    ? `<div class="docs-grid">${starDocs.map(f => docCardHTML(f, true)).join("")}</div>`
+    : stars.length
+      ? `<div class="star-list">${stars.map(s => `<button type="button" class="star-item" data-star="${esc(s.id)}"><span class="st">★</span><span>${esc(s.name)}<small>${esc(CAT[s.cat] ? CAT[s.cat].name : "")}</small></span></button>`).join("")}</div>`
+      : `<p class="empty">Tài liệu được đánh dấu ★ sẽ hiện ở đây.${isAdmin ? " (Đánh dấu khi tải lên hoặc bấm Sửa ở tài liệu.)" : ""}</p>`;
+  const catCards = visibleCats().map(c => {
+    const n = catCount(c.key);
+    return `<div class="card-wrap"><button type="button" class="card" data-cat="${c.key}"><span class="cv">${cover(c.icon, c.color)}</span><span class="nm">${esc(c.name)}</span><span class="ct">${n != null ? n + " tài liệu" : canCat(c.key) ? "" : "Cần mã tài khoản"}</span></button></div>`;
+  }).join("");
+  const recent = isAdmin || session
+    ? Object.values(items).filter(f => canCat(f.cat) && f.cat !== "cho").sort((a, b) => String(b.added || b.modified || "").localeCompare(String(a.added || a.modified || ""))).slice(0, 10)
+    : [];
   $("#main").innerHTML = `
-    <section class="box grow"><h2 class="box-title sm">THÔNG DỤNG</h2>${starHTML}</section>
-    <section class="box">
-      <h4 class="links-title">LIÊN KẾT</h4>
-      <div class="links">
-        ${tile(L.pnl, "lib", ["#173f66", "#3c6ea3"], "PN Library", true)}
-        ${tile(L.pnw, "cal", ["#1f527d", "#5c8fbf"], "PN Work", true)}
-        ${tile(L.drive, "cloud", ["#2f6f4f", "#58a37a"], "Google Drive", true)}
-        ${tile(L.gmail, "mail", ["#8e2c3f", "#c4566a"], "Gmail", true)}
-        <button type="button" class="ltile" data-go="tai-khoan"><span class="lv">${cover("key", ["#0f2945", "#2b5f8f"])}</span><span>Quản lý mã tài khoản</span></button>
-      </div>
-    </section>`;
+    <section class="box"><h2 class="box-title">Thông dụng ★</h2>${starHTML}</section>
+    <section class="box"><h2 class="box-title">Danh mục thư viện</h2><div class="cards">${catCards}</div></section>
+    ${recent.length ? `<section class="box"><h2 class="box-title">Mới cập nhật</h2><div class="docs-grid">${recent.map(f => docCardHTML(f, true)).join("")}</div></section>` : ""}`;
 }
 
 /* ---------- Trang danh mục & thư mục ---------- */
@@ -285,7 +357,7 @@ function renderFolder(id, isCatRoot) {
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
-  const crumbs = path.length > 1 ? `<div class="crumbs">${path.map((p, i) => i === path.length - 1 ? esc(p.name) : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`).join(" › ")}</div>` : "";
+  const crumbs = `<div class="crumbs"><a data-home>Trang chủ</a>${path.map((p, i) => `<span class="sep">/</span>` + (i === path.length - 1 ? `<span>${esc(i === 0 ? cat.name : p.name)}</span>` : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`)).join("")}</div>`;
   const tools = isAdmin && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
   $("#main").innerHTML = `<section class="box${isAdmin ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}</h2>${crumbs}${tools}${body}${isAdmin ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên thẳng thư mục đang mở.</p>' : ""}${navRow()}</section>`;
 }
@@ -313,14 +385,8 @@ async function savePastedFolderImage(file) {
   const status = $("#imagePasteStatus"), btn = $("#imageSaveBtn");
   btn.disabled = true; status.textContent = "Đang tải ảnh lên Google Drive…";
   try {
-    const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
-    const named = new File([file], "Anh-bia-" + id.slice(0, 8) + "." + ext, { type: file.type });
-    const uploaded = await uploadFile(named, settings.rootId);
-    await drive(`https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions?sendNotificationEmail=false`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "reader", type: "anyone" })
-    });
-    const url = "https://drive.google.com/thumbnail?id=" + encodeURIComponent(uploaded.id) + "&sz=w1200";
+    const { url, id: fileId } = await uploadImage(file, "Anh-bia-" + id.slice(0, 8));
+    const uploaded = { id: fileId };
     await setDoc(doc(db, "pnd_tree", id), { imageUrl: url, imageFileId: uploaded.id }, { merge: true });
     tree[id].imageUrl = url; tree[id].imageFileId = uploaded.id;
     status.textContent = "Đã lưu ảnh bìa. Có thể đóng cửa sổ.";
@@ -342,14 +408,83 @@ function noteHTML(f) {
   if (!l.length && f.modified) l.push('<span class="muted">Cập nhật ' + fmtDate(String(f.modified).slice(0, 10)) + "</span>");
   return l.join("<br>");
 }
+/* ---------- Danh sách tài liệu: bộ lọc, dạng lưới (bìa sách), dạng danh sách ---------- */
+let filt = { year: "", fmt: "", status: "", sort: "" };
+let view = (() => { try { return localStorage.getItem("pnd_view") || "grid"; } catch (e) { return "grid"; } })();
+function applyFilt(list) {
+  let out = list.filter(f => (!filt.year || String(yearOfItem(f)) === filt.year) && (!filt.fmt || fmtOf(f) === filt.fmt) && (!filt.status || (filt.status === "-" ? !f.status : f.status === filt.status)));
+  const recentKey = f => String(f.added || f.modified || "");
+  if (filt.sort === "moi") out.sort((a, b) => recentKey(b).localeCompare(recentKey(a)));
+  else if (filt.sort === "ban-hanh") out.sort((a, b) => String(b.issued || "").localeCompare(String(a.issued || "")) || yearOfItem(b) - yearOfItem(a));
+  else if (filt.sort === "ten") out.sort((a, b) => vi.compare(a.name, b.name));
+  else out = sortFiles(out);
+  return out;
+}
+const sortAttrs = (f, noSort) => `draggable="${isAdmin && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
+function metaLine(f) {
+  const y = yearOfItem(f), p = [];
+  if (f.number) p.push(`<span>${esc(f.number)}</span>`); else if (y) p.push(`<span>Năm ${y}</span>`);
+  if (f.status) p.push(`<span class="st-chip ${stCls(f.status)}">${esc(f.status)}</span>`);
+  return p.join("");
+}
+function admBtns(f) {
+  if (!isAdmin) return "";
+  return `<div class="doc-adm"><button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button></div>` +
+    (driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
+}
+function docCardHTML(f, noSort) {
+  return `<article class="doc-card" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết</button>${admBtns(f)}</article>`;
+}
+function rowHTML(f, withPath) {
+  const notes = noteHTML(f), k = fmtOf(f);
+  return `<div class="doc-row" ${sortAttrs(f)}><div class="doc-cover" data-doc="${esc(f.id)}">${bookHTML(f)}</div>
+    <div><h4 data-doc="${esc(f.id)}">${f.star ? "★ " : ""}${esc(f.name)}</h4><div class="doc-meta"><span>${FMT[k][0]}${f.size ? " · " + fmtSize(f.size) : ""}</span>${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div>${notes ? `<p class="doc-note">${notes}</p>` : ""}${withPath ? `<div class="doc-path"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></div>` : ""}</div>
+    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">Chi tiết &amp; Xem</button>${f.link ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở tệp</a>` : ""}${admBtns(f)}</div></div>`;
+}
 function tableHTML(files, withPath) {
-  return `<div class="doc-list"><div class="doc-list-head">DANH MỤC</div>${files.map(f => `<div class="doc-row" draggable="${isAdmin ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}">
-    <div class="doc-main"><a class="doc-name${String(f.name || "").trim().split(/\s+/).filter(Boolean).length > 4 ? " doc-name-long" : ""}" title="${esc(f.name)}" href="${esc(f.link || "#")}" ${f.link ? 'target="_blank" rel="noopener"' : 'aria-disabled="true"'}>${f.star ? "★ " : ""}${esc(f.name)}</a>${f.hit ? '<span class="muted">(khớp nội dung)</span>' : ""}${noteHTML(f) ? `<small class="doc-note">${noteHTML(f)}</small>` : ""}${withPath ? `<small class="doc-note"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></small>` : ""}</div>
-    <div class="doc-actions">${isAdmin ? `<button type="button" class="doc-edit" data-edit="${esc(f.id)}" title="Sửa thông tin">Sửa</button><button type="button" class="doc-edit" data-move="${esc(f.id)}" title="Chuyển thư mục">Chuyển</button>` : ""}${f.shared === false && f.mime !== "link" && isAdmin ? '<span class="muted">chưa chia sẻ</span>' : ""}</div>
-  </div>`).join("")}</div>`;
+  const years = [...new Set(files.map(yearOfItem).filter(Boolean))].sort((a, b) => b - a);
+  const fmts = new Set(files.map(fmtOf)), stats = [...new Set(files.map(f => f.status).filter(Boolean))];
+  const opt = (v, l, cur) => `<option value="${esc(v)}"${String(cur) === String(v) ? " selected" : ""}>${esc(l)}</option>`;
+  const shown = applyFilt(files);
+  const any = filt.year || filt.fmt || filt.status || filt.sort;
+  const bar = `<div class="filters">
+    <label>Năm: <select data-filt="year">${opt("", "Tất cả năm", filt.year)}${years.map(y => opt(y, y, filt.year)).join("")}</select></label>
+    <label>Định dạng: <select data-filt="fmt">${opt("", "Tất cả tệp", filt.fmt)}${Object.keys(FMT).filter(k => fmts.has(k) || filt.fmt === k).map(k => opt(k, FMT[k][0], filt.fmt)).join("")}</select></label>
+    <label>Hiệu lực: <select data-filt="status">${opt("", "Tất cả", filt.status)}${stats.map(s => opt(s, s, filt.status)).join("")}${opt("-", "Chưa ghi", filt.status)}</select></label>
+    <label>Sắp xếp: <select data-filt="sort">${opt("", "Theo thứ tự thư mục", filt.sort)}${opt("ban-hanh", "Ngày ban hành mới nhất", filt.sort)}${opt("moi", "Mới cập nhật", filt.sort)}${opt("ten", "Tên A – Z", filt.sort)}</select></label>
+    <span class="sp"></span>
+    ${any ? '<button type="button" class="linkish" data-freset>Đặt lại</button>' : ""}
+    <span class="view-tg" role="group" aria-label="Cách hiển thị"><button type="button" data-view="grid" class="${view === "grid" ? "on" : ""}">▦ Lưới</button><button type="button" data-view="list" class="${view === "list" ? "on" : ""}">☰ Danh sách</button></span>
+  </div>`;
+  const body = !shown.length ? `<p class="empty">Không có tài liệu khớp bộ lọc.</p>`
+    : view === "list" ? `<div class="docs-list">${shown.map(f => rowHTML(f, withPath)).join("")}</div>`
+    : `<div class="docs-grid">${shown.map(f => docCardHTML(f)).join("")}</div>`;
+  return bar + `<div class="count-line">Tìm được <b>${shown.length}</b> tài liệu</div>` + body;
 }
 
+/* ---------- Chi tiết tài liệu (xem trước Google Drive) ---------- */
+function openDoc(id) {
+  const f = items[id]; if (!f) return;
+  const did = driveIdOf(f), k = fmtOf(f);
+  $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
+  $("#docPreview").innerHTML = did
+    ? `<iframe src="https://drive.google.com/file/d/${encodeURIComponent(did)}/preview" allow="autoplay" title="Xem trước tài liệu"></iframe>`
+    : f.link && /^https?:\/\//.test(f.link)
+      ? `<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
+      : `<div class="pv-card"><p class="muted">Tài liệu chưa có đường dẫn.</p></div>`;
+  const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
+  $("#docInfo").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${a === "Tình trạng" ? `<span class="st-chip ${stCls(b)}">${esc(b)}</span>` : esc(b)}</dd>`).join("");
+  const acts = [];
+  if (f.link) acts.push(`<a class="btn primary" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
+  if (did && !/google-apps/.test(f.fmime || f.mime)) acts.push(`<a class="btn" href="https://drive.google.com/uc?export=download&id=${encodeURIComponent(did)}" target="_blank" rel="noopener">Tải về máy</a>`);
+  if (isAdmin) acts.push(`<button type="button" class="btn" data-edit="${esc(f.id)}">Sửa thông tin</button>`, `<button type="button" class="btn" data-move="${esc(f.id)}">Chuyển thư mục</button>`);
+  $("#docActs").innerHTML = acts.join("");
+  $("#dlgDoc").showModal();
+}
+$("#dlgDoc").addEventListener("close", () => { $("#docPreview").innerHTML = ""; });
+
 /* ---------- Tìm kiếm ---------- */
+let searchCache = { q: null, hits: null };
 const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
 async function renderSearch(q) {
   q = q.trim(); $("#searchInput").value = q;
@@ -361,13 +496,21 @@ async function renderSearch(q) {
   const draw = (extra) => {
     $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2><div class="crumbs">“${esc(q)}” · ${res.length} tài liệu${extra || ""}</div>${res.length ? tableHTML(sortFiles(res), true) : '<p class="empty">Không tìm thấy tài liệu phù hợp.</p>'}${navRow()}</section>`;
   };
+  // Đổi bộ lọc trên cùng một từ khóa: dùng lại kết quả tìm trong nội dung, không gọi Drive lần nữa
+  if (isAdmin && searchCache.q === q && searchCache.hits) {
+    const ids = new Set(res.map(r => r.id));
+    searchCache.hits.forEach(id => { if (items[id] && !ids.has(id)) res.push({ ...items[id], hit: true }); });
+    draw(" (gồm cả khớp trong nội dung tệp)"); return;
+  }
   draw(isAdmin ? (driveTok ? " · đang tìm cả trong nội dung tệp…" : " · đăng nhập lại Google (bấm Quét) để tìm cả trong nội dung tệp") : "");
   if (isAdmin && driveTok) {
     try {
       const ids = new Set(res.map(r => r.id));
       const qq = "fullText contains '" + q.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "' and trashed=false";
       const j = await drive("https://www.googleapis.com/drive/v3/files?pageSize=200&fields=files(id)&q=" + encodeURIComponent(qq));
-      (j.files || []).forEach(x => { if (items[x.id] && !ids.has(x.id)) res.push({ ...items[x.id], hit: true }); });
+      const hits = [];
+      (j.files || []).forEach(x => { const key = items[x.id] ? x.id : items["dr-" + x.id] ? "dr-" + x.id : null; if (key) { hits.push(key); if (!ids.has(key)) res.push({ ...items[key], hit: true }); } });
+      searchCache = { q, hits };
       draw(" (gồm cả khớp trong nội dung tệp)");
     } catch (e) { draw(" · chưa tìm được trong nội dung: " + e.message); }
   }
@@ -414,6 +557,9 @@ $("#imageFileInput").addEventListener("change", e => {
   if (file) selectFolderCover(file);
 });
 $("#imagePasteArea").addEventListener("click", () => $("#imagePasteArea").focus());
+$("#imagePasteArea").addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); $("#imagePasteArea").classList.add("drag"); });
+$("#imagePasteArea").addEventListener("dragleave", () => $("#imagePasteArea").classList.remove("drag"));
+$("#imagePasteArea").addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); $("#imagePasteArea").classList.remove("drag"); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) selectFolderCover(f); });
 async function ensureUser() { if (auth.currentUser) return auth.currentUser; const r = await signInAnonymously(auth); return r.user; }
 async function useCode(raw) {
   try { return await useCode0(raw); } catch (e) { if (/^Mã /.test(e.message)) e.invalidCode = true; throw e; }
@@ -503,6 +649,41 @@ async function uploadFile(file, parent, onProg) {
   return j;
 }
 const isShared = f => (f.permissionIds || []).includes("anyoneWithLink");
+const shareAnyone = id => drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/permissions?sendNotificationEmail=false&supportsAllDrives=true`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "reader", type: "anyone" }) });
+/* Ảnh bìa (thư mục, tài liệu) nằm trong thư mục riêng “_Ảnh bìa PND”, không lẫn vào Chờ phân loại */
+const COVER_DIR = "_Ảnh bìa PND";
+const isCoverName = n => /^(_|Anh-bia-|Bia-tai-lieu-)/.test(String(n || ""));
+async function coverFolder() {
+  if (settings.coverDir) return settings.coverDir;
+  const q = encodeURIComponent("name='" + COVER_DIR + "' and mimeType='" + FOLDER + "' and '" + settings.rootId + "' in parents and trashed=false");
+  const ex = await drive("https://www.googleapis.com/drive/v3/files?fields=files(id)&q=" + q);
+  const id = ex.files && ex.files[0] ? ex.files[0].id : (await createFolder(COVER_DIR, settings.rootId)).id;
+  settings.coverDir = id; await setDoc(doc(db, "pnd_settings", "root"), { coverDir: id }, { merge: true });
+  return id;
+}
+async function uploadImage(file, prefix) {
+  const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+  const up = await uploadFile(new File([file], prefix + "-" + rid().slice(0, 6) + "." + ext, { type: file.type }), await coverFolder());
+  await shareAnyone(up.id);
+  return { url: "https://drive.google.com/thumbnail?id=" + encodeURIComponent(up.id) + "&sz=w1200", id: up.id };
+}
+/* Gắn tệp (hoặc mọi tệp trong một thư mục) đã có trên Drive vào thư viện — tệp giữ nguyên vị trí */
+async function attachDrive(did, key, parent, meta, share, nameIn) {
+  const f = await drive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(did)}?supportsAllDrives=true&fields=${FIELDS}`);
+  const list = f.mimeType === FOLDER ? (await listChildren(f.id)).filter(x => x.mimeType !== FOLDER) : [f];
+  if (!list.length) throw new Error("Thư mục “" + f.name + "” chưa có tệp nào.");
+  const filled = Object.fromEntries(Object.entries(meta).filter(([, v]) => v !== "" && v !== false));
+  const out = [];
+  for (const x of list) {
+    if (share && !isShared(x)) { try { await shareAnyone(x.id); x.permissionIds = (x.permissionIds || []).concat("anyoneWithLink"); } catch (e) { console.warn("chia sẻ", x.name, e.message); } }
+    const name = nameIn && list.length === 1 ? nameIn : null;
+    let it;
+    if (items[x.id]) it = { ...items[x.id], ...filled, shared: isShared(x), ...(name ? { name } : {}) };       // tệp đã nằm trong kho PND
+    else it = { ...fileItem(x, key, parent), ...(items["dr-" + x.id] || {}), id: "dr-" + x.id, driveId: x.id, fmime: x.mimeType || "", mime: "link", cat: key, parent, ...filled, name: name || (items["dr-" + x.id] || {}).name || x.name, added: (items["dr-" + x.id] || {}).added || new Date().toISOString() };
+    await setDoc(doc(db, "pnd_items", it.id), it, { merge: true }); items[it.id] = it; out.push(it);
+  }
+  return out;
+}
 function fileItem(f, cat, parent) { return { id: f.id, name: f.name, mime: f.mimeType || "", link: f.webViewLink || ("https://drive.google.com/open?id=" + f.id), modified: f.modifiedTime || "", size: +f.size || 0, cat, parent, shared: isShared(f) }; }
 
 async function commitOps(ops) { // ops: [{type:'set'|'merge'|'del', ref, data}]
@@ -555,6 +736,7 @@ async function buildFromDrive(listFn, withCho, progress, allowCats) {
   if (!top.length) { const e = new Error("Thư mục gốc chưa chia sẻ hoặc đang trống"); e.status = 403; throw e; }
   for (const f of top) {
     const key = keyById[f.id];
+    if (!key && isCoverName(f.name)) continue; // ảnh bìa, không phải tài liệu
     if (f.mimeType === FOLDER) {
       if (key) { if (allowCats && !allowCats(key)) continue; newTree[f.id] = { id: f.id, name: CAT[key] ? CAT[key].name : f.name, parent: settings.rootId, cat: key, depth: 1 }; }
       else if (withCho) newTree[f.id] = { id: f.id, name: f.name, parent: settings.cats.cho, cat: "cho", depth: 2 };
@@ -649,14 +831,14 @@ async function scanDrive(silent) {
 
 /* Mở chia sẻ "Bất kỳ ai có đường liên kết đều xem được" cho tệp đã xếp danh mục */
 async function shareAll() {
-  const list = Object.values(items).filter(f => f.shared === false && f.mime !== "link" && f.cat !== "cho");
+  const list = Object.values(items).filter(f => f.shared === false && driveIdOf(f) && f.cat !== "cho");
   if (!list.length) { toast("Mọi tài liệu đã được mở chia sẻ xem."); return; }
   if (!await ask("Mở chia sẻ “Bất kỳ ai có đường liên kết đều xem được” cho " + list.length + " tệp trong kho PND?\nNgười có mã tài khoản mới thấy được đường link trên web; nội dung tệp không bị sửa.")) return;
   setBusy("#btnShare", true, "Đang chia sẻ…");
   let ok = 0;
   try {
     for (const f of list) {
-      try { await drive(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?sendNotificationEmail=false`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "reader", type: "anyone" }) }); f.shared = true; ok++;
+      try { await shareAnyone(driveIdOf(f)); f.shared = true; ok++;
         await setDoc(doc(db, "pnd_items", f.id), { shared: true }, { merge: true }); } catch (e) { console.warn(f.name, e.message); }
       $("#adminNote").textContent = "Đã chia sẻ " + ok + "/" + list.length;
     }
@@ -763,66 +945,159 @@ async function syncStar(f) {
 
 /* ---------- Tải lên / nhập tài liệu ---------- */
 let upMode = "file", upFilesSel = [];
+/* Ô chọn ảnh bìa: bấm để chọn, kéo thả hoặc dán (Ctrl+V) */
+function coverPicker(el) {
+  const st = { file: null, clear: false };
+  const inp = el.querySelector("input"), prev = el.querySelector(".cp-prev");
+  let obj = null;
+  const show = url => { prev.style.backgroundImage = url ? `url("${url}")` : ""; el.classList.toggle("has", !!url); };
+  const set = file => {
+    if (!file || !file.type.startsWith("image/")) { toast("Hãy chọn tệp ảnh (JPG, PNG, WebP).", "err"); return; }
+    if (file.size > 12 * 1024 * 1024) { toast("Ảnh vượt quá 12 MB.", "err"); return; }
+    if (obj) URL.revokeObjectURL(obj); obj = URL.createObjectURL(file);
+    st.file = file; st.clear = false; show(obj);
+  };
+  el.addEventListener("click", () => inp.click());
+  el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } });
+  inp.addEventListener("click", e => e.stopPropagation());
+  inp.onchange = () => { if (inp.files[0]) set(inp.files[0]); };
+  el.addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); el.classList.add("drag"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drag"));
+  el.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); el.classList.remove("drag"); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) set(f); });
+  el.addEventListener("paste", e => { const it = [...(e.clipboardData && e.clipboardData.items || [])].find(x => x.type.startsWith("image/")); if (it) { e.preventDefault(); set(it.getAsFile()); } });
+  st.reset = url => { st.file = null; st.clear = false; inp.value = ""; show(url || ""); };
+  st.markClear = () => { st.file = null; st.clear = true; inp.value = ""; show(""); };
+  return st;
+}
+const upCover = coverPicker($("#upCover")), edCover = coverPicker($("#edCover"));
+
 function folderOptions(key) {
   const rootId = catRootId(key); if (!rootId) return "";
   const out = [];
   const walk = (id, lvl) => { const n = tree[id]; if (!n) return; out.push(`<option value="${esc(id)}">${"— ".repeat(lvl)}${esc(lvl ? n.name : CAT[key].name + " (thư mục gốc)")}</option>`); sortFolders(childrenOf(id)).forEach(c => walk(c.id, lvl + 1)); };
   walk(rootId, 0); return out.join("");
 }
-function openUpload(folderId, files) {
+const DROP_TEXT = "Chọn được nhiều tệp, tối đa 50 MB mỗi tệp. Tệp được lưu vào đúng thư mục Drive đã chọn.";
+function openUpload(folderId, files, mode) {
   if (!isAdmin) { openLogin(); setLoginTab("admin"); $("#loginErr").textContent = "Tải tài liệu lên cần đăng nhập quản trị."; return; }
   if (!settings) { toast("Chưa có cây thư mục. Bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
-  $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; upFilesSel = []; $("#dropText").textContent = "Kéo thả tệp vào đây hoặc bấm để chọn";
+  $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; upFilesSel = []; $("#dropText").textContent = DROP_TEXT; upCover.reset();
   $("#upCat").innerHTML = CATS.map(c => `<option value="${c.key}">${esc(c.name)}</option>`).join("");
   const cur = currentCatKey(); if (cur && CAT[cur]) $("#upCat").value = cur;
   $("#upFolder").innerHTML = folderOptions($("#upCat").value);
   const h = decodeURIComponent(location.hash.slice(1));
   const target = folderId && tree[folderId] ? folderId : (h.startsWith("f/") && tree[h.slice(2)] ? h.slice(2) : (cur ? catRootId(cur) : ""));
   if (target && tree[target]) { $("#upCat").value = tree[target].cat; $("#upFolder").innerHTML = folderOptions(tree[target].cat); $("#upFolder").value = target; }
-  $("#upTitle").textContent = target && tree[target] && tree[target].depth >= 2 ? "TẢI LÊN: " + tree[target].name.toUpperCase() : "TẢI TÀI LIỆU LÊN";
+  $("#upTitle").textContent = target && tree[target] && tree[target].depth >= 2 ? "TẢI / GẮN TÀI LIỆU VÀO: " + tree[target].name.toUpperCase() : "TẢI / GẮN TÀI LIỆU";
   if (files && files.length) { upFilesSel = [...files]; $("#dropText").textContent = upFilesSel.map(f => f.name).join(", "); }
-  $("#newFolderWrap").hidden = false; setUpMode("file");
+  $("#newFolderWrap").hidden = false; setUpMode(mode || "file");
   $("#dlgUpload").showModal();
 }
-function setUpMode(m) { upMode = m; document.querySelectorAll("[data-up]").forEach(b => b.classList.toggle("on", b.dataset.up === m)); document.querySelectorAll("[data-uppane]").forEach(p => p.hidden = p.dataset.uppane !== m); }
+function setUpMode(m) {
+  upMode = m;
+  document.querySelectorAll("[data-up]").forEach(b => b.classList.toggle("on", b.dataset.up === m));
+  document.querySelectorAll("[data-uppane]").forEach(p => p.hidden = p.dataset.uppane !== m);
+  $("#upNameWrap").hidden = m === "bulk";
+  $("#upNameWrap span").textContent = m === "link" ? "Tên văn bản (bắt buộc)" : m === "drive" ? "Tên văn bản (để trống: lấy tên tệp trên Drive)" : "Tên văn bản (để trống: lấy tên tệp)";
+  $("#upGo").textContent = m === "file" ? "Tải lên & lưu vào thư viện" : "Gắn vào thư viện";
+  $("#upErr").textContent = "";
+}
 function metaFrom(pref) {
   return { issuer: $(pref + "Issuer").value.trim(), number: $(pref + "Number").value.trim(), issued: $(pref + "Issued").value, effective: $(pref + "Effective").value, status: $(pref + "Status").value, note: $(pref + "Note").value.trim(), star: $(pref + "Star").checked };
 }
+function parseBulk(text) {
+  return String(text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean).map(line => {
+    const m = line.match(/^(.*?)\s*\|\s*(\S+)\s*$/);
+    return { line, name: m ? m[1].trim() : "", url: m ? m[2] : line };
+  });
+}
+const isWebUrl = s => { try { const u = new URL(s); return /^https?:$/.test(u.protocol); } catch (e) { return false; } };
+const nameFromUrl = s => { try { const u = new URL(s); return (u.hostname.replace(/^www\./, "") + decodeURIComponent(u.pathname.replace(/\/$/, ""))).slice(0, 120); } catch (e) { return s.slice(0, 120); } };
 async function submitUpload(e) {
   e.preventDefault();
   const key = $("#upCat").value; let parent = $("#upFolder").value;
   const meta = metaFrom("#up"), nameIn = $("#upName").value.trim(), newF = $("#upNewFolder").value.trim();
-  if (!parent) { $("#upErr").textContent = "Chọn thư mục lưu."; return; }
-  if (upMode === "file" && !upFilesSel.length) { $("#upErr").textContent = "Chọn ít nhất một tệp."; return; }
-  if (upMode === "link") { try { const u = new URL($("#upUrl").value.trim()); if (!/^https?:$/.test(u.protocol)) throw 0; } catch (x) { $("#upErr").textContent = "Đường link phải bắt đầu bằng http:// hoặc https://."; return; } if (!nameIn) { $("#upErr").textContent = "Nhập tên văn bản cho đường link."; return; } }
-  if (upFilesSel.some(f => f.size > 50 * 1024 * 1024)) { $("#upErr").textContent = "Có tệp lớn hơn 50 MB; hãy tải trực tiếp lên Drive rồi bấm Quét."; return; }
-  $("#upErr").textContent = ""; const btn = $("#upGo"); btn.disabled = true;
+  const err = m => { $("#upErr").textContent = m; };
+  if (!parent) return err("Chọn thư mục lưu.");
+  let bulk = [];
+  if (upMode === "file") {
+    if (!upFilesSel.length) return err("Chọn ít nhất một tệp.");
+    if (upFilesSel.some(f => f.size > 50 * 1024 * 1024)) return err("Có tệp lớn hơn 50 MB; hãy tải trực tiếp lên Drive rồi dùng “Gắn từ Google Drive”.");
+  } else if (upMode === "link") {
+    if (!isWebUrl($("#upUrl").value.trim())) return err("Đường link phải bắt đầu bằng http:// hoặc https://.");
+    if (!nameIn) return err("Nhập tên văn bản cho đường link.");
+  } else if (upMode === "drive") {
+    if (!driveIdFrom($("#upDrive").value)) return err("Chưa nhận ra link hoặc mã tệp Google Drive. Ví dụ: https://drive.google.com/file/d/…/view");
+  } else {
+    bulk = parseBulk($("#upBulk").value);
+    if (!bulk.length) return err("Dán ít nhất một dòng: Tên tài liệu | Link, hoặc chỉ link.");
+    const bad = bulk.filter(b => !driveIdFrom(b.url) && !isWebUrl(b.url));
+    if (bad.length) return err("Dòng chưa có link hợp lệ: " + bad.map(b => "“" + b.line.slice(0, 60) + "”").join("; "));
+  }
+  err(""); const btn = $("#upGo"); btn.disabled = true;
+  const msg = t => { $("#upMsg").textContent = t; };
+  const saved = [], fails = [];
   try {
     if (newF) {
-      $("#upMsg").textContent = "Đang tạo thư mục…";
+      msg("Đang tạo thư mục…");
       const f = await createFolder(newF, parent); const p = tree[parent];
       const node = { id: f.id, name: f.name, parent, cat: key, depth: (p ? p.depth : 1) + 1 };
       await setDoc(doc(db, "pnd_tree", f.id), node); tree[f.id] = node; parent = f.id;
+      $("#upNewFolder").value = ""; $("#upFolder").innerHTML = folderOptions(key); $("#upFolder").value = parent;
     }
-    const saved = [];
+    let cv = null;
+    if (upCover.file) { msg("Đang tải ảnh bìa…"); cv = await uploadImage(upCover.file, "Bia-tai-lieu"); }
+    const withCover = it => cv ? { ...it, coverUrl: cv.url, coverFileId: cv.id } : it;
+    const now = () => new Date().toISOString();
     if (upMode === "file") {
       let i = 0;
       for (const file of upFilesSel) {
-        $("#upMsg").textContent = "Đang tải lên " + (++i) + "/" + upFilesSel.length + ": " + file.name;
-        const d = await uploadFile(file, parent);
-        const it = { ...fileItem(d, key, parent), ...meta, name: (nameIn && upFilesSel.length === 1) ? nameIn : d.name, added: new Date().toISOString() };
-        await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+        msg("Đang tải lên " + (++i) + "/" + upFilesSel.length + ": " + file.name);
+        try {
+          const d = await uploadFile(file, parent);
+          const it = withCover({ ...fileItem(d, key, parent), fmime: d.mimeType || "", ...meta, name: (nameIn && upFilesSel.length === 1) ? nameIn : d.name, added: now() });
+          await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+        } catch (x) { fails.push(file.name + ": " + x.message); }
+      }
+    } else if (upMode === "link") {
+      const it = withCover({ id: "lk-" + rid(), name: nameIn, mime: "link", link: $("#upUrl").value.trim(), cat: key, parent, shared: true, ...meta, added: now() });
+      await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+    } else if (upMode === "drive") {
+      msg("Đang đọc tệp trên Google Drive…");
+      for (const it of await attachDrive(driveIdFrom($("#upDrive").value), key, parent, meta, $("#upDriveShare").checked, nameIn)) {
+        if (cv) { Object.assign(it, { coverUrl: cv.url, coverFileId: cv.id }); await setDoc(doc(db, "pnd_items", it.id), { coverUrl: cv.url, coverFileId: cv.id }, { merge: true }); }
+        saved.push(it);
       }
     } else {
-      const it = { id: "lk-" + rid(), name: nameIn, mime: "link", link: $("#upUrl").value.trim(), cat: key, parent, shared: true, ...meta, added: new Date().toISOString() };
-      await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+      let i = 0;
+      for (const b of bulk) {
+        msg("Đang gắn " + (++i) + "/" + bulk.length + ": " + (b.name || b.url).slice(0, 70));
+        try {
+          const did = driveIdFrom(b.url);
+          if (did) {
+            for (const it of await attachDrive(did, key, parent, meta, $("#upBulkShare").checked, b.name)) {
+              if (cv) { Object.assign(it, { coverUrl: cv.url, coverFileId: cv.id }); await setDoc(doc(db, "pnd_items", it.id), { coverUrl: cv.url, coverFileId: cv.id }, { merge: true }); }
+              saved.push(it);
+            }
+          } else {
+            const it = withCover({ id: "lk-" + rid(), name: b.name || nameFromUrl(b.url), mime: "link", link: b.url, cat: key, parent, shared: true, ...meta, added: now() });
+            await setDoc(doc(db, "pnd_items", it.id), it); items[it.id] = it; saved.push(it);
+          }
+        } catch (x) { fails.push(b.line.slice(0, 80) + " — " + x.message); }
+      }
     }
     for (const it of saved) if (it.star) await syncStar(it);
-    await logAct(upMode === "file" ? "UPLOAD" : "LINK", saved.map(s => s.name).join("; "));
+    if (saved.length) await logAct({ file: "UPLOAD", link: "LINK", drive: "DRIVE_ATTACH", bulk: "BULK_ATTACH" }[upMode], saved.map(s => s.name).join("; ").slice(0, 900));
+    if (fails.length) {
+      msg(saved.length ? "Đã lưu " + saved.length + " tài liệu." : "");
+      err("Chưa lưu được " + fails.length + " mục:\n" + fails.join("\n"));
+      if (saved.length) route();
+      return;
+    }
     $("#dlgUpload").close();
-    toast("Đã lưu " + saved.length + " tài liệu.", "ok");
+    toast("Đã lưu " + saved.length + " tài liệu vào thư viện.", "ok");
     go("f/" + parent);
-  } catch (x) { $("#upErr").textContent = x.message || "Chưa lưu được."; $("#upMsg").textContent = ""; }
+  } catch (x) { err(x.message || "Chưa lưu được."); msg(""); }
   finally { btn.disabled = false; }
 }
 
@@ -830,15 +1105,24 @@ async function submitUpload(e) {
 let editing = null;
 function openEdit(id) {
   const f = items[id]; if (!f) return; editing = id;
-  $("#edName").value = f.name || ""; $("#edIssuer").value = f.issuer || ""; $("#edNumber").value = f.number || ""; $("#edIssued").value = f.issued || ""; $("#edEffective").value = f.effective || ""; $("#edStatus").value = f.status || ""; $("#edNote").value = f.note || ""; $("#edStar").checked = !!f.star; $("#edErr").textContent = "";
+  $("#edName").value = f.name || ""; $("#edIssuer").value = f.issuer || ""; $("#edNumber").value = f.number || ""; $("#edIssued").value = f.issued || ""; $("#edEffective").value = f.effective || ""; $("#edStatus").value = f.status || ""; $("#edNote").value = f.note || ""; $("#edStar").checked = !!f.star; $("#edErr").textContent = ""; $("#edMsg").textContent = "";
+  edCover.reset(f.coverUrl || ""); $("#edCoverClear").hidden = !f.coverUrl;
   $("#dlgEdit").showModal();
 }
 async function submitEdit(e) {
   e.preventDefault(); const f = items[editing]; if (!f) return;
   const patch = { id: f.id, cat: f.cat, parent: f.parent, link: f.link || "", mime: f.mime || "", ...metaFrom("#ed"), name: $("#edName").value.trim() || f.name };
-  try { await setDoc(doc(db, "pnd_items", f.id), patch, { merge: true }); Object.assign(f, patch); await syncStar(f); $("#dlgEdit").close(); toast("Đã lưu thông tin.", "ok"); route(); }
-  catch (x) { $("#edErr").textContent = x.message; }
+  const btn = $("#edGo"); btn.disabled = true;
+  try {
+    if (edCover.file) { $("#edMsg").textContent = "Đang tải ảnh bìa…"; const cv = await uploadImage(edCover.file, "Bia-tai-lieu"); patch.coverUrl = cv.url; patch.coverFileId = cv.id; }
+    else if (edCover.clear) { patch.coverUrl = ""; patch.coverFileId = ""; }
+    await setDoc(doc(db, "pnd_items", f.id), patch, { merge: true }); Object.assign(f, patch); await syncStar(f);
+    $("#dlgEdit").close(); toast("Đã lưu thông tin.", "ok"); route();
+  }
+  catch (x) { $("#edErr").textContent = x.message; $("#edMsg").textContent = ""; }
+  finally { btn.disabled = false; }
 }
+$("#edCoverClear").onclick = () => { edCover.markClear(); $("#edCoverClear").hidden = true; };
 
 /* ---------- Quản lý mã tài khoản (như mã lớp PNL) ---------- */
 async function renderAccounts() {
@@ -848,7 +1132,7 @@ async function renderAccounts() {
   }
   const d = new Date(); d.setMonth(d.getMonth() + 6); const def = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">QUẢN LÝ MÃ TÀI KHOẢN</h2>
-    <form id="maForm" novalidate>
+    <form id="maForm" class="panel-form" novalidate>
       <p class="muted" id="maHelp">Một mã dùng chung cho nhiều người. Mỗi mã mở một hoặc nhiều danh mục (giống mã lớp của PN Library); người vượt quá số người cho phép sẽ bị từ chối.</p>
       <div class="grid2">
         <label class="fld"><span>Mã</span><input id="maCode" maxlength="24" placeholder="Ví dụ: PND2026" style="text-transform:uppercase" autocomplete="off"></label>
@@ -948,7 +1232,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-close],[data-image-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -957,15 +1241,18 @@ document.addEventListener("click", e => {
   else if (t.dataset.go) { e.preventDefault(); go(t.dataset.go); }
   else if (t.hasAttribute("data-login")) openLogin();
   else if (t.hasAttribute("data-adminlogin")) { openLogin(); setLoginTab("admin"); }
-  else if (t.dataset.edit) openEdit(t.dataset.edit);
-  else if (t.dataset.move) moveTo(t.dataset.move, false);
+  else if (t.dataset.edit) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openEdit(t.dataset.edit); }
+  else if (t.dataset.move) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); moveTo(t.dataset.move, false); }
+  else if (t.dataset.doc) { e.preventDefault(); openDoc(t.dataset.doc); }
+  else if (t.dataset.view) { view = t.dataset.view; try { localStorage.setItem("pnd_view", view); } catch (x) {} route(); }
+  else if (t.hasAttribute("data-freset")) { filt = { year: "", fmt: "", status: "", sort: "" }; route(); }
   else if (t.dataset.movefolder) moveTo(t.dataset.movefolder, true);
   else if (t.dataset.upload) openUpload(t.dataset.upload);
   else if (t.dataset.fnew) newFolder(t.dataset.fnew);
   else if (t.dataset.fren) renameFolder(t.dataset.fren);
   else if (t.dataset.fdel) deleteFolder(t.dataset.fdel);
   else if (t.dataset.fimg) setFolderImage(t.dataset.fimg);
-  else if (t.dataset.star) { const f = items[t.dataset.star]; if (f && f.link) window.open(f.link, "_blank", "noopener"); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
+  else if (t.dataset.star) { const f = items[t.dataset.star]; if (f) openDoc(f.id); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
@@ -1023,6 +1310,7 @@ $("#edForm").onsubmit = submitEdit;
 $("#aiForm").onsubmit = askAI;
 $("#aiInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#aiForm").requestSubmit(); } });
 window.addEventListener("hashchange", route);
+document.addEventListener("change", e => { const s = e.target.closest && e.target.closest("[data-filt]"); if (s) { filt[s.dataset.filt] = s.value; route(); } });
 
 /* ---------- Khởi động ---------- */
 async function afterAuth() {
