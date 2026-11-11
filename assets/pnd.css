@@ -494,3 +494,10 @@ details.more .fld{margin-top:8px}
 .mtg-ts{color:#64748b;font-size:.85em;font-variant-numeric:tabular-nums}
 .mtg-unclear{background:#fef3c7;color:#92400e;border-radius:3px;padding:0 3px;cursor:pointer;white-space:nowrap}
 @media (max-width:640px){.mtg-grid{grid-template-columns:1fr}}
+
+/* Tóm tắt văn bản */
+.infile-toolbar .sum-btn{color:#7c3aed;border-color:#c4b5fd}
+.infile-toolbar .sum-btn:disabled{opacity:.7;cursor:progress}
+.note-summary{background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:6px;padding:8px 12px;margin:0 0 12px}
+.note-summary h3{margin:0 0 6px;color:#5b21b6}
+.note-summary-meta{color:#64748b;font-size:.85em;margin:6px 0 0}

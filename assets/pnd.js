@@ -768,6 +768,7 @@ function inFileEditorHTML(f, hasOriginalView) {
       <button type="button" data-edcmd="removeFormat" title="Xóa định dạng">⌫</button>
       <span class="sep"></span>
       <button type="button" class="dict-btn" data-dictate title="Bấm để bắt đầu nói, chữ hiện vào văn bản tại vị trí con trỏ. Bấm lần nữa để dừng.">🎤 Đọc chính tả</button>
+      <button type="button" class="sum-btn" data-notesum title="Gemini tóm tắt nội dung ghi chú (hoặc phần đang bôi đen) và đặt bản tóm tắt lên đầu văn bản">✨ Tóm tắt văn bản</button>
       <button type="button" class="mtg-btn" data-mtgpanel title="Ghi âm cuộc họp, chuyển thành chữ và tóm tắt trực tiếp">🎙 Ghi cuộc họp</button>
       <label class="dict-opt" title="Gemini tự thêm dấu câu, viết hoa cho từng câu vừa đọc"><input type="checkbox" id="dictPunct"${dictPunctOn() ? " checked" : ""}> Tự thêm dấu câu</label>
     </div>
@@ -2358,8 +2359,10 @@ async function dictDrain(d) {
     }
     d.ctx = (d.ctx + " " + out).slice(-600);
     if (job.sp.isConnected) {
+      // Chèn chữ đã có dấu TRƯỚC thẻ tạm rồi mới gỡ thẻ tạm, để vị trí chèn tiếp theo luôn nằm SAU câu này (giữ đúng thứ tự nói)
       const tn = document.createTextNode(job.lead + out);
-      job.sp.replaceWith(tn);
+      job.sp.before(tn);
+      job.sp.remove();
       d.sheet.dispatchEvent(new Event("input"));
     }
   }
@@ -2701,9 +2704,50 @@ function mtgRename() {
   toast(n ? "Đã đổi " + n + " chỗ." : "Không tìm thấy tên cần đổi.", n ? "ok" : "err");
 }
 
+
+/* ---------- Tóm tắt văn bản ghi chú bằng Gemini ---------- */
+// Bôi đen một phần → tóm tắt phần đó; không bôi đen → tóm tắt cả ghi chú. Bản tóm tắt đặt ở đầu văn bản; bấm lại thì thay bản cũ.
+async function summarizeNote(btn) {
+  const sheet = $("#inFileSheet"); if (!sheet) return;
+  if (!myGrant()) { openLogin("Đăng nhập để dùng tóm tắt bằng Gemini."); return; }
+  const sel = window.getSelection();
+  let src = "", part = false;
+  if (sel && sel.rangeCount && !sel.isCollapsed && sheet.contains(sel.getRangeAt(0).commonAncestorContainer)) { src = sel.toString(); part = true; }
+  if (!src.trim()) {
+    const c = sheet.cloneNode(true);
+    c.querySelectorAll(".note-summary").forEach(x => x.remove());
+    src = c.innerText || c.textContent || "";
+  }
+  src = src.replace(/\n{3,}/g, "\n\n").trim();
+  if (src.split(/\s+/).length < 25) { toast("Văn bản còn quá ngắn để tóm tắt.", "err"); return; }
+  const old = btn.textContent; btn.disabled = true; btn.textContent = "⏳ Đang tóm tắt…";
+  try {
+    const prompt = `Tóm tắt TRUNG THÀNH văn bản tiếng Việt dưới đây theo đúng nội dung có trong văn bản:
+- Không thêm thông tin, không suy diễn, không bình luận.
+- Nêu các ý chính theo trình tự; nếu có kết luận, quyết định, việc cần làm, người phụ trách, thời hạn thì nêu rõ.
+- Giữ nguyên tên riêng, số hiệu văn bản, số liệu.
+- Ngắn gọn (khoảng 1/5 độ dài gốc, tối đa 400 từ).
+Định dạng: nhóm ý (nếu cần) bắt đầu bằng "## ", mỗi ý bắt đầu bằng "- ".
+
+VĂN BẢN:
+${src.slice(0, 120000)}`;
+    const r = await (await getMtgModel()).generateContent(prompt);
+    const html = mdLite(r.response.text());
+    if (!html) throw new Error("Gemini không trả về nội dung");
+    const stamp = new Date().toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" });
+    let box = sheet.querySelector(".note-summary");
+    if (!box) { box = document.createElement("div"); box.className = "note-summary"; sheet.insertBefore(box, sheet.firstChild); }
+    box.innerHTML = `<h3>✨ TÓM TẮT NỘI DUNG${part ? " (phần đã chọn)" : ""}</h3>${html}<p class="note-summary-meta"><i>Tóm tắt bằng Gemini lúc ${stamp} — cần đối chiếu văn bản gốc. Bấm “✨ Tóm tắt văn bản” lần nữa để cập nhật.</i></p>`;
+    sheet.dispatchEvent(new Event("input"));
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+    toast("Đã đặt bản tóm tắt lên đầu văn bản.", "ok");
+  } catch (e) { toast("Chưa tóm tắt được: " + (e.message || e), "err"); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote],[data-dictate],[data-mtgpanel],[data-mtgstart],[data-mtgstop],[data-mtgnow],[data-mtgrename],[data-mtgplay],[data-mtgretry]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote],[data-dictate],[data-mtgpanel],[data-mtgstart],[data-mtgstop],[data-mtgnow],[data-mtgrename],[data-mtgplay],[data-mtgretry],[data-notesum]");
   if (!t) return;
   if (mtgS && mtgS.recording && t.closest("#dlgDoc") && (t.hasAttribute("data-close") || t.dataset.docmode || t.dataset.transferdoc || t.dataset.transferfolder || t.dataset.copyfolder || t.dataset.doc || t.dataset.del || t.dataset.edit || t.dataset.move)) {
     e.preventDefault();
@@ -2711,6 +2755,7 @@ document.addEventListener("click", e => {
     mtgAbort();
   }
   if (t.hasAttribute("data-mtgpanel")) { e.preventDefault(); const pn = $("#mtgPanel"); if (pn) pn.hidden = !pn.hidden && !(mtgS && mtgS.recording) ? true : false; return; }
+  if (t.hasAttribute("data-notesum")) { e.preventDefault(); summarizeNote(t); return; }
   if (t.hasAttribute("data-mtgstart")) { e.preventDefault(); mtgStart(); return; }
   if (t.hasAttribute("data-mtgstop")) { e.preventDefault(); mtgStop(); return; }
   if (t.hasAttribute("data-mtgnow")) { e.preventDefault(); mtgRotate(true); return; }
