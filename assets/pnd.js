@@ -41,7 +41,9 @@ const BASE_CATS = [
 let CATS = BASE_CATS.slice(), CAT = {}, PUBLIC_CATS = [];
 const CAT_COLORS = [["#2e5c8a", "#4f86b8"], ["#6a3fa0", "#9a73c9"], ["#1f7a6d", "#46a798"], ["#a5402d", "#d36d52"], ["#24527a", "#3d8bbd"], ["#2f7d32", "#66a95a"], ["#b23a5a", "#dc6d8a"], ["#5b6675", "#8a96a6"], ["#8a6d1f", "#c29a35"], ["#0f6b7a", "#3aa0b0"], ["#7a3b16", "#b8693a"], ["#3a3f8f", "#6b70c9"]];
 function applyCatDefs() {
-  const defs = (settings && settings.catDefs) || {}, roots = (settings && settings.cats) || {};
+  const defs = { ...((settings && settings.catDefs) || {}) }, roots = { ...((settings && settings.cats) || {}) };
+  if (!defs["bst-ghi-chu"]) defs["bst-ghi-chu"] = { name: "Ghi chú", icon: "doc", color: ["#b45309", "#d97706"], order: 45 };
+  if (!roots["bst-ghi-chu"]) roots["bst-ghi-chu"] = "root-bst-ghi-chu";
   const list = BASE_CATS.map((c, i) => {
     const d = defs[c.key] || {};
     const name = d.name || c.name;
@@ -50,7 +52,7 @@ function applyCatDefs() {
   for (const [k, d] of Object.entries(defs)) if (!BASE_CATS.some(c => c.key === k) && !d.removed && roots[k])
     list.push({ key: k, name: d.name, title: d.name.toUpperCase(), label: [d.name.toUpperCase()], group: false, color: d.color || CAT_COLORS[7], icon: d.icon || "folder", sub: {}, custom: true, order: Number.isFinite(d.order) ? d.order : 50 });
   list.sort((a, b) => (a.key === "cho") - (b.key === "cho") || a.order - b.order);
-  CATS = list.filter(c => !c.removed && (!settings || roots[c.key] || c.key === "cho"));
+  CATS = list.filter(c => !c.removed && (!settings || roots[c.key] || c.key === "cho" || c.key === "bst-ghi-chu"));
   CAT = Object.fromEntries(list.map(c => [c.key, c]));
   PUBLIC_CATS = CATS.filter(c => !c.adminOnly);
 }
@@ -184,15 +186,16 @@ function cover(icon, colors, label) {
 }
 
 /* ---------- Định dạng tệp, bìa sách, kích thước ---------- */
-const FMT = { pdf: ["PDF", "PDF"], word: ["Word / Văn bản", "DOC"], excel: ["Excel / Bảng tính", "XLS"], ppt: ["PowerPoint / Trình chiếu", "PPT"], image: ["Hình ảnh", "ẢNH"], media: ["Video / Âm thanh", "MEDIA"], link: ["Liên kết web", "LINK"], khac: ["Tệp khác", "FILE"] };
+const FMT = { pdf: ["PDF", "PDF"], word: ["Word / Văn bản", "DOC"], note: ["Văn bản Ghi chú", "GHI CHÚ"], excel: ["Excel / Bảng tính", "XLS"], ppt: ["PowerPoint / Trình chiếu", "PPT"], image: ["Hình ảnh", "ẢNH"], media: ["Video / Âm thanh", "MEDIA"], link: ["Liên kết web", "LINK"], khac: ["Tệp khác", "FILE"] };
 function driveIdFrom(s) {
   s = String(s || "").trim();
   const m = s.match(/(?:drive|docs)\.google\.com\/.*?(?:\/d\/|folders\/|[?&]id=)([\w-]{20,})/) || s.match(/^([\w-]{25,})$/);
   return m ? m[1] : "";
 }
-function driveIdOf(f) { if (f.locked) return ""; return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
+function driveIdOf(f) { if (f.locked || f.isNote) return ""; return f.driveId || (f.mime && f.mime !== "link" ? f.id : driveIdFrom(f.link)); }
 function fmtOf(f) {
   const m = String(f.fmime || f.mime || ""), ext = (String(f.name || "").toLowerCase().match(/\.([a-z0-9]{2,5})$/) || [])[1] || "";
+  if (f.isNote || m === "text/html" || m === "note") return "note";
   if (m === "application/pdf" || ext === "pdf") return "pdf";
   if (/wordprocessing|msword|google-apps\.document|opendocument\.text/.test(m) || /^(docx?|odt|rtf)$/.test(ext)) return "word";
   if (/spreadsheet|ms-excel|google-apps\.spreadsheet|text\/csv/.test(m) || /^(xlsx?|ods|csv)$/.test(ext)) return "excel";
@@ -220,10 +223,12 @@ async function loadSettings() {
 }
 async function loadTree() {
   try { const snap = await getDocs(collection(db, "pnd_tree")); tree = {}; snap.forEach(d => tree[d.id] = d.data()); } catch (e) { console.warn("tree", e); }
+  const ghiChuRoot = (settings && settings.cats && settings.cats["bst-ghi-chu"]) || "root-bst-ghi-chu";
+  if (!tree[ghiChuRoot]) tree[ghiChuRoot] = { id: ghiChuRoot, name: (CAT["bst-ghi-chu"] && CAT["bst-ghi-chu"].name) || "Ghi chú", parent: (settings && settings.rootId) || "root", cat: "bst-ghi-chu", depth: 1 };
   loaded.tree = true;
 }
 let catalog = {};   // pnd_catalog: danh mục công khai (tên, thông tin ban hành) của mọi tài liệu trừ Mật — không có đường link
-const CATALOG_FIELDS = ["name", "cat", "parent", "access", "number", "issuer", "issued", "effective", "status", "star", "order", "fmime", "mime", "size", "modified", "added", "coverUrl"];
+const CATALOG_FIELDS = ["name", "cat", "parent", "access", "number", "issuer", "issued", "effective", "status", "star", "order", "fmime", "mime", "size", "modified", "added", "coverUrl", "isNote"];
 function catalogEntry(f) { const o = {}; for (const k of CATALOG_FIELDS) if (f[k] !== undefined && f[k] !== null && f[k] !== "") o[k] = f[k]; if (o.mime && o.mime !== "link") o.mime = "file"; return o; }
 async function loadCatalog() {
   catalog = {};
@@ -257,6 +262,12 @@ async function syncCatalog() {
     console.info("Đã đồng bộ danh mục công khai: " + ops.length + " thay đổi.");
   } catch (e) { console.warn("đồng bộ danh mục công khai", e.message); }
 }
+const LOCAL_NOTES_KEY = "pnd_local_notes_v1";
+function getLocalNotes() { try { return JSON.parse(localStorage.getItem(LOCAL_NOTES_KEY) || "{}"); } catch (e) { return {}; } }
+function saveLocalNotes(map) { try { localStorage.setItem(LOCAL_NOTES_KEY, JSON.stringify(map)); } catch (e) {} }
+function putLocalNote(it) { const m = getLocalNotes(); m[it.id] = it; saveLocalNotes(m); }
+function delLocalNote(id) { const m = getLocalNotes(); delete m[id]; saveLocalNotes(m); }
+
 async function loadItems() {
   items = {};
   try {
@@ -281,11 +292,20 @@ async function loadItems() {
   }
   loadItems.retried = false;
   await loadCatalog();
+  const loc = getLocalNotes();
+  const ghiChuRoot = catRootId("bst-ghi-chu");
+  for (const [id, n] of Object.entries(loc)) {
+    if (n && n._deleted) { delete items[id]; continue; }
+    if (!items[id]) items[id] = { ...n, parent: tree[n.parent] ? n.parent : ghiChuRoot };
+    else if (n.noteContent && (!items[id].noteContent || String(n.modified || "") > String(items[id].modified || ""))) {
+      items[id] = { ...items[id], noteContent: n.noteContent, note: n.note || items[id].note, isNote: items[id].isNote || n.isNote, attachedNotes: n.attachedNotes || items[id].attachedNotes };
+    }
+  }
   loaded.items = true;
 }
 
 /* ---------- Cây thư mục ---------- */
-const catRootId = key => settings && settings.cats ? settings.cats[key] : null;
+const catRootId = key => (settings && settings.cats && settings.cats[key]) || (key === "bst-ghi-chu" ? "root-bst-ghi-chu" : null);
 const childrenOf = id => Object.values(tree).filter(n => n.parent === id);
 const filesOf = id => Object.values(items).filter(f => f.parent === id && canList(f));
 function sortBySavedOrder(list, fallback) {
@@ -444,10 +464,33 @@ function cardHTML(n, cat) {
 }
 const upBtn = parent => canUp() ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
 const addBtn = (parent, label) => canUp() ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
+function noteCreateBoxHTML(folderId, catKey) {
+  const isNoteCat = catKey === "bst-ghi-chu";
+  return `<div class="note-create-box" id="noteCreateBox"${isNoteCat ? "" : " hidden"}>
+    <div class="note-create-head">
+      <h3>📝 TẠO VĂN BẢN BẰNG GHI CHÚ &amp; SOẠN THẢO TRỰC TIẾP TRONG FILE</h3>
+      <span class="muted">Soạn thảo trực tiếp trong file được tạo ra · Lưu lại &amp; chuyển vào file hoặc thư mục cụ thể</span>
+    </div>
+    <div class="note-create-row">
+      <input id="quickNoteName" type="text" placeholder="Nhập tiêu đề văn bản / ghi chú mới (VD: Dự thảo công văn, Biên bản họp, Ghi chú chuyên đề...)" autocomplete="off">
+      <select id="quickNoteTpl" aria-label="Mẫu văn bản">
+        <option value="blank">📄 Văn bản trống</option>
+        <option value="congvan">🏛 Mẫu Công văn / Hành chính</option>
+        <option value="bienban">📋 Mẫu Biên bản làm việc</option>
+        <option value="nghiencuu">🔬 Phiếu ghi chú nghiên cứu</option>
+      </select>
+      <button type="button" data-quicknote="${esc(folderId)}">＋ Tạo file &amp; Soạn thảo ngay</button>
+    </div>
+  </div>`;
+}
 function renderCat(key) {
+  if (!CAT[key] && !loaded.tree) { $("#main").innerHTML = `<section class="box"><p class="empty">Đang tải danh mục…</p></section>`; return; }
   const cat = CAT[key]; if (!cat || (cat.adminOnly && !isAdmin)) { go(""); return; }
   if (!requireAccess(key)) return;
-  const rootId = catRootId(key);
+  let rootId = catRootId(key);
+  if (key === "bst-ghi-chu" && rootId && !tree[rootId]) {
+    tree[rootId] = { id: rootId, name: cat.name || "Ghi chú", parent: (settings && settings.rootId) || "root", cat: "bst-ghi-chu", depth: 1 };
+  }
   if (!rootId) { $("#main").innerHTML = `<section class="box"><h2 class="box-title">${esc(cat.title)}</h2><p class="empty">Danh mục đang được chuẩn bị.${isAdmin ? " Bấm “Khởi tạo cây thư mục” ở trang chủ." : ""}</p>${navRow()}</section>`; return; }
   renderFolder(rootId, true);
 }
@@ -475,10 +518,15 @@ function renderFolder(id, isCatRoot) {
   }
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
-  if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này." : "Đang tải danh mục…"}</p>`;
+  if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này. Bấm “＋ Tạo file & Soạn thảo ngay” để tạo văn bản ghi chú mới." : "Đang tải danh mục…"}</p>`;
   const crumbs = `<div class="crumbs"><a data-home>Trang chủ</a>${path.map((p, i) => `<span class="sep">/</span>` + (i === path.length - 1 ? `<span>${esc(i === 0 ? cat.name : p.name)}</span>` : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`)).join("")}</div>`;
-  const tools = canUp() && node.depth <= 1 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button></div>` : canUp() && node.depth >= 2 ? `<div class="page-tools"><button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>` : "";
-  $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên. Kéo một tài liệu hoặc thư mục thả vào giữa thẻ thư mục khác (hoặc vào tên thư mục ở cột trái) để chuyển vào đó; thả vào mép thẻ để đổi thứ tự.</p>' : ""}${navRow()}</section>`;
+  const noteBtn = `<button type="button" class="hl" style="background:#b45309;border-color:#b45309" data-togglenote="${esc(id)}">📝 Tạo văn bản bằng ghi chú</button>`;
+  const tools = canUp() && node.depth <= 1
+    ? `<div class="page-tools">${noteBtn}<button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button></div>`
+    : canUp() && node.depth >= 2
+      ? `<div class="page-tools">${noteBtn}<button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>`
+      : `<div class="page-tools">${noteBtn}</div>`;
+  $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${noteCreateBoxHTML(id, cat.key)}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên. Kéo một tài liệu hoặc thư mục thả vào giữa thẻ thư mục khác (hoặc vào tên thư mục ở cột trái) để chuyển vào đó; thả vào mép thẻ để đổi thứ tự.</p>' : ""}${navRow()}</section>`;
 }
 let imageTargetFolder = null;
 function setFolderImage(id) {
@@ -547,18 +595,19 @@ function metaLine(f) {
   return p.join("");
 }
 function admBtns(f) {
-  if (!canUp() || f.locked) return "";
-  return `<div class="doc-adm"><button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button></div>` +
-    (driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
+  if (f.locked) return "";
+  if (!canUp() && !f.isLocalNote && !f.isNote) return "";
+  return `<div class="doc-adm">${canUp() ? `<button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button>` : `<button type="button" data-doc="${esc(f.id)}">Soạn thảo</button>`}<button type="button" data-del="${esc(f.id)}" title="Xóa file">Xóa</button></div>` +
+    (canUp() && driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
 }
 function docCardHTML(f, noSort) {
-  return `<article class="doc-card${f.locked ? " locked" : ""}" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : "Chi tiết"}</button>${admBtns(f)}</article>`;
+  return `<article class="doc-card${f.locked ? " locked" : ""}" ${sortAttrs(f, noSort)}>${f.star ? '<span class="badge-star" title="Thông dụng">★</span>' : ""}<div class="doc-cover" data-doc="${esc(f.id)}" title="Xem chi tiết">${bookHTML(f)}</div><button type="button" class="doc-title" data-doc="${esc(f.id)}" title="${esc(f.name)}">${esc(f.name)}</button><div class="doc-meta">${metaLine(f)}${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : (f.isNote || fmtOf(f) === "note" ? "✎ Mở & Soạn thảo" : "Chi tiết")}</button>${admBtns(f)}</article>`;
 }
 function rowHTML(f, withPath) {
   const notes = noteHTML(f), k = fmtOf(f);
   return `<div class="doc-row" ${sortAttrs(f)}><div class="doc-cover" data-doc="${esc(f.id)}">${bookHTML(f)}</div>
     <div><h4 data-doc="${esc(f.id)}">${f.star ? "★ " : ""}${esc(f.name)}</h4><div class="doc-meta"><span>${FMT[k][0]}${f.size ? " · " + fmtSize(f.size) : ""}</span>${f.hit ? '<span class="muted">khớp nội dung</span>' : ""}</div>${notes ? `<p class="doc-note">${notes}</p>` : ""}${withPath ? `<div class="doc-path"><a data-folder="${esc(f.parent)}">${esc(pathOf(f.parent).map(p => p.name).join(" › "))}</a></div>` : ""}</div>
-    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : "Chi tiết &amp; Xem"}</button>${f.link && (canDl() || !driveIdOf(f)) ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">${driveIdOf(f) ? "Mở tệp" : "Mở liên kết"}</a>` : ""}${admBtns(f)}</div></div>`;
+    <div class="acts"><button type="button" class="btn-detail" data-doc="${esc(f.id)}">${f.locked ? "🔒 Chi tiết" : (f.isNote || k === "note" ? "✎ Mở &amp; Soạn thảo" : "Chi tiết &amp; Xem")}</button>${f.link && !f.isNote && (canDl() || !driveIdOf(f)) ? `<a class="btn" style="text-align:center;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">${driveIdOf(f) ? "Mở tệp" : "Mở liên kết"}</a>` : ""}${admBtns(f)}</div></div>`;
 }
 function tableHTML(files, withPath) {
   const years = [...new Set(files.map(yearOfItem).filter(Boolean))].sort((a, b) => b - a);
@@ -581,30 +630,454 @@ function tableHTML(files, withPath) {
   return bar + `<div class="count-line">Tìm được <b>${shown.length}</b> tài liệu</div>` + body;
 }
 
-/* ---------- Chi tiết tài liệu (xem trước Google Drive) ---------- */
-function openDoc(id) {
-  const f = items[id]; if (!f) return;
-  const did = driveIdOf(f), k = fmtOf(f);
+/* ---------- Tạo văn bản bằng ghi chú, Soạn thảo trong file, Chuyển file & Xóa file ---------- */
+let currentOpenDocId = null;
+let currentDocMode = "view"; // "view" | "edit"
+
+function buildNoteTemplate(tpl, title) {
+  const nowStr = fmtDate(todayISO());
+  const safeTitle = esc(title || "Văn bản ghi chú mới");
+  if (tpl === "congvan") {
+    return `<table style="width:100%;border:0;margin-bottom:14px"><tr><td style="border:0;text-align:center;width:45%;vertical-align:top"><b>ĐƠN VỊ / CƠ QUAN CHỦ QUẢN</b><br><b>TÊN ĐƠN VỊ BAN HÀNH</b><br>Số: … / …</td><td style="border:0;text-align:center;width:55%;vertical-align:top"><b>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</b><br><b>Độc lập - Tự do - Hạnh phúc</b><br><i>…, ngày ${nowStr}</i></td></tr></table><h2 style="text-align:center;margin:14px 0 6px">${safeTitle.toUpperCase()}</h2><p style="text-align:center"><b>Kính gửi:</b> …………………………………………………………</p><p>1. Nội dung triển khai: …………………………………………………………………………………………</p><p>2. Đề xuất / Kiến nghị: …………………………………………………………………………………………</p>`;
+  }
+  if (tpl === "bienban") {
+    return `<h2 style="text-align:center;margin:0 0 6px">BIÊN BẢN LÀM VIỆC / HỌP</h2><p style="text-align:center"><b>Chủ đề: ${safeTitle}</b></p><p><b>1. Thời gian:</b> Ngày ${nowStr}</p><p><b>2. Thành phần tham dự:</b> …………………………………………………………………………</p><p><b>3. Nội dung trao đổi:</b></p><ul><li>Nội dung 1: ……………………………………………………………………………………</li><li>Nội dung 2: ……………………………………………………………………………………</li></ul><p><b>4. Kết luận / Phân công thực hiện:</b></p><table><thead><tr><th>STT</th><th>Nội dung công việc</th><th>Người phụ trách</th><th>Thời hạn</th></tr></thead><tbody><tr><td>1</td><td>…</td><td>…</td><td>…</td></tr><tr><td>2</td><td>…</td><td>…</td><td>…</td></tr></tbody></table>`;
+  }
+  if (tpl === "nghiencuu") {
+    return `<h2 style="margin:0 0 8px">PHIẾU GHI CHÚ NGHIÊN CỨU: ${safeTitle}</h2><p><b>Ngày lập:</b> ${nowStr} · <b>Chuyên đề / Hồ sơ:</b> ………………………………</p><hr><h3>I. Tóm tắt nội dung cốt lõi</h3><p>• Ý chính 1: …………………………………………………………………………………………</p><h3>II. Trích dẫn / Căn cứ pháp lý - học liệu</h3><blockquote>“Ghi nhận điều khoản, trích dẫn hoặc số hiệu văn bản liên quan tại đây…”</blockquote><h3>III. Ghi chú áp dụng &amp; Hướng xử lý</h3><p>☐ Việc cần thực hiện 1</p><p>☐ Việc cần thực hiện 2</p>`;
+  }
+  return `<h2 style="margin-top:0">${safeTitle}</h2><p><i>Ngày tạo: ${nowStr}</i></p><p>Nhập nội dung soạn thảo văn bản / ghi chú trực tiếp tại đây…</p>`;
+}
+
+function stripHtmlText(html) {
+  const d = document.createElement("div");
+  d.innerHTML = html || "";
+  return (d.textContent || d.innerText || "").replace(/\s+/g, " ").trim();
+}
+
+async function createNoteDocument(folderId, customTitle, tpl) {
+  let targetFolder = folderId && tree[folderId] ? folderId : catRootId("bst-ghi-chu");
+  if (!targetFolder || !tree[targetFolder]) {
+    const gcRoot = catRootId("bst-ghi-chu") || "root-bst-ghi-chu";
+    if (!tree[gcRoot]) tree[gcRoot] = { id: gcRoot, name: (CAT["bst-ghi-chu"] && CAT["bst-ghi-chu"].name) || "Ghi chú", parent: (settings && settings.rootId) || "root", cat: "bst-ghi-chu", depth: 1 };
+    targetFolder = gcRoot;
+  }
+  const nameIn = (customTitle != null ? customTitle : (($("#quickNoteName") || {}).value || "")).trim();
+  const tplIn = tpl || (($("#quickNoteTpl") || {}).value || "blank");
+  const title = nameIn || ("Văn bản ghi chú - " + fmtDate(todayISO()) + " " + new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }));
+  const htmlContent = buildNoteTemplate(tplIn, title);
+  const plainSummary = stripHtmlText(htmlContent).slice(0, 240);
+  const now = new Date().toISOString();
+  const node = tree[targetFolder];
+  const catKey = (node && node.cat) || "bst-ghi-chu";
+  const accessLv = canUp() ? folderLevel(targetFolder) : "cong-khai";
+  const id = "note-" + rid();
+  const newItem = {
+    id,
+    name: title,
+    mime: "link",
+    fmime: "text/html",
+    isNote: true,
+    isLocalNote: !canUp(),
+    link: "#doc/" + id,
+    cat: catKey,
+    parent: targetFolder,
+    access: accessLv,
+    issued: todayISO(),
+    added: now,
+    modified: now,
+    status: "Còn hiệu lực",
+    note: plainSummary,
+    noteContent: htmlContent,
+    size: new Blob([htmlContent]).size,
+    shared: true
+  };
+  items[id] = newItem;
+  putLocalNote(newItem);
+  if (canUp()) {
+    try {
+      await setDoc(doc(db, "pnd_items", id), newItem);
+      scheduleCatalogSync();
+      await logAct("NOTE_NEW", title);
+    } catch (e) { console.warn("Lưu ghi chú lên Firestore:", e.message); }
+  }
+  if ($("#quickNoteName")) $("#quickNoteName").value = "";
+  toast("Đã tạo file văn bản ghi chú “" + title + "”. Mời bạn soạn thảo trực tiếp!", "ok");
+  route();
+  openDoc(id, "edit");
+}
+
+function allDocOptions(excludeId) {
+  const list = Object.values(items).filter(x => x && x.id !== excludeId && canList(x));
+  list.sort((a, b) => vi.compare(a.name || "", b.name || ""));
+  if (!list.length) return `<option value="">-- Chưa có tài liệu đích nào khác --</option>`;
+  return `<option value="">-- Chọn file (tài liệu) cụ thể để chuyển vào (${list.length} file) --</option>` +
+    list.map(x => {
+      const catName = CAT[x.cat] ? CAT[x.cat].name : x.cat;
+      return `<option value="${esc(x.id)}">${esc(x.name)} [${esc(catName)}]</option>`;
+    }).join("");
+}
+
+function inFileEditorHTML(f, hasOriginalView) {
+  const htmlContent = f.noteContent || `<h2 style="margin-top:0">${esc(f.name)}</h2><p>${esc(f.note || "Nhập nội dung văn bản / ghi chú trực tiếp tại đây…")}</p>`;
+  return `<div class="infile-wrap" id="inFileWrap">
+    <div class="infile-mode-bar">
+      <div class="infile-mode-tabs">
+        ${hasOriginalView ? `<button type="button" class="infile-tab" data-docmode="view">👁 Xem tài liệu gốc</button>` : ""}
+        <button type="button" class="infile-tab on" data-docmode="edit">✎ Soạn thảo trực tiếp trong file</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="inFileSaveStatus" style="font-size:12px;color:#fde68a">Sẵn sàng soạn thảo</span>
+        <button type="button" class="btn green sm" data-notesave="${esc(f.id)}" style="background:#16a34a;border-color:#15803d;color:#fff;padding:5px 12px">💾 Lưu văn bản (Ctrl+S)</button>
+      </div>
+    </div>
+    <div class="infile-title-bar">
+      <span style="font-size:12.5px;font-weight:700;color:var(--muted)">TÊN FILE VĂN BẢN:</span>
+      <input id="inFileTitleInput" type="text" value="${esc(f.name)}" placeholder="Nhập tên file văn bản…">
+    </div>
+    <div class="infile-toolbar" role="toolbar" aria-label="Thanh công cụ soạn thảo">
+      <select data-edblock aria-label="Kiểu đoạn">
+        <option value="P">Đoạn văn</option>
+        <option value="H1">Tiêu đề lớn (H1)</option>
+        <option value="H2">Tiêu đề mục (H2)</option>
+        <option value="H3">Tiêu đề con (H3)</option>
+        <option value="BLOCKQUOTE">Trích dẫn</option>
+      </select>
+      <select data-edsize aria-label="Cỡ chữ">
+        <option value="3">Cỡ thường</option>
+        <option value="4">Cỡ vừa</option>
+        <option value="5">Cỡ lớn</option>
+        <option value="6">Rất lớn</option>
+      </select>
+      <span class="sep"></span>
+      <button type="button" data-edcmd="bold" title="In đậm (Ctrl+B)"><b>B</b></button>
+      <button type="button" data-edcmd="italic" title="In nghiêng (Ctrl+I)"><i>I</i></button>
+      <button type="button" data-edcmd="underline" title="Gạch chân (Ctrl+U)"><u>U</u></button>
+      <button type="button" data-edcmd="strikeThrough" title="Gạch ngang"><s>S</s></button>
+      <span class="sep"></span>
+      <button type="button" data-edcmd="justifyLeft" title="Căn trái">≣ Trái</button>
+      <button type="button" data-edcmd="justifyCenter" title="Căn giữa"> Center</button>
+      <button type="button" data-edcmd="justifyRight" title="Căn phải">Phải</button>
+      <button type="button" data-edcmd="justifyFull" title="Căn đều 2 bên">Đều</button>
+      <span class="sep"></span>
+      <button type="button" data-edcmd="insertUnorderedList" title="Danh sách chấm">• DS</button>
+      <button type="button" data-edcmd="insertOrderedList" title="Danh sách số">1. DS</button>
+      <button type="button" data-edins="table" title="Chèn bảng">⊞ Bảng</button>
+      <button type="button" data-edins="check" title="Chèn mục kiểm tra">☑ Mục chọn</button>
+      <button type="button" data-edins="date" title="Chèn ngày giờ">📅 Ngày</button>
+      <button type="button" data-edcmd="removeFormat" title="Xóa định dạng">⌫</button>
+    </div>
+    <div class="infile-canvas">
+      <div id="inFileSheet" class="infile-sheet" contenteditable="true" spellcheck="true">${htmlContent}</div>
+    </div>
+    <div class="infile-transfer">
+      <div class="infile-transfer-grid">
+        <div class="infile-transfer-card">
+          <h5>📌 1. Lưu &amp; Chuyển vào một File (Tài liệu) cụ thể</h5>
+          <div class="infile-transfer-row">
+            <select id="inFileTargetDoc">${allDocOptions(f.id)}</select>
+          </div>
+          <div class="infile-transfer-row">
+            <select id="inFileTransferDocMode" style="flex:1">
+              <option value="attach">Đính kèm &amp; gắn vào file đích (kèm chuyển cùng thư mục)</option>
+              <option value="merge">Gộp / nối nội dung văn bản vào nội dung file đích</option>
+            </select>
+            <button type="button" class="btn primary sm" data-transferdoc="${esc(f.id)}">⇄ Chuyển vào File này</button>
+          </div>
+        </div>
+        <div class="infile-transfer-card">
+          <h5>📁 2. Lưu &amp; Chuyển sang Thư mục / Danh mục cụ thể</h5>
+          <div class="infile-transfer-row">
+            <select id="inFileTargetFolder">${allFolderOptions()}</select>
+          </div>
+          <div class="infile-transfer-row">
+            <button type="button" class="btn primary sm" data-transferfolder="${esc(f.id)}">⇄ Chuyển sang thư mục</button>
+            <button type="button" class="btn sm" data-copyfolder="${esc(f.id)}">📋 Sao chép thêm vào thư mục</button>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px dashed var(--line)">
+        <span class="muted">Xuất thành file cụ thể về máy tính:</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="btn sm" data-exportdoc="${esc(f.id)}">📘 Xuất file Word (.doc)</button>
+          <button type="button" class="btn sm" data-exporttxt="${esc(f.id)}">📄 Xuất file Text (.txt)</button>
+          <button type="button" class="btn sm" data-printnote="${esc(f.id)}">🖨 In / Lưu PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveInFileNote(id, silent) {
+  const f = items[id]; if (!f) return false;
+  const sheet = $("#inFileSheet"), titleInp = $("#inFileTitleInput"), st = $("#inFileSaveStatus");
+  if (!sheet) return false;
+  const html = sheet.innerHTML;
+  const newName = (titleInp && titleInp.value.trim()) || f.name;
+  const plain = stripHtmlText(html).slice(0, 260);
+  const now = new Date().toISOString();
+  f.name = newName;
+  f.noteContent = html;
+  f.note = plain || f.note || "";
+  f.modified = now;
+  f.size = new Blob([html]).size;
+  if (!driveIdOf(f) && (!f.link || f.link.startsWith("#doc/"))) {
+    f.isNote = true;
+    f.mime = "link";
+    f.fmime = "text/html";
+  }
   $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
-  $("#docPreview").innerHTML = f.locked
-    ? `<div class="pv-card"><div style="font-size:34px">🔒</div><h4>Bạn chưa được mở tài liệu này</h4><p class="muted">${esc(lockReason(f))}</p>${myGrant() ? "" : '<button type="button" class="btn primary" data-login>Đăng nhập</button>'}</div>`
-    : did
-    ? `<iframe src="https://drive.google.com/file/d/${encodeURIComponent(did)}/preview" allow="autoplay" title="Xem trước tài liệu"></iframe>${canDl() ? "" : '<span class="pv-shield" title="Tài khoản chỉ được xem, không tải về"></span>'}`
-    : f.link && /^https?:\/\//.test(f.link)
-      ? `<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
-      : `<div class="pv-card"><p class="muted">Tài liệu chưa có đường dẫn.</p></div>`;
-  const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Mức truy cập", LV[levelOf(f)].name], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
-  $("#docInfo").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${a === "Tình trạng" ? `<span class="st-chip ${stCls(b)}">${esc(b)}</span>` : a === "Mức truy cập" ? lvChip(levelOf(f)) : esc(b)}</dd>`).join("");
+  putLocalNote(f);
+  if (canUp()) {
+    try {
+      if (st) st.textContent = "Đang lưu lên đám mây…";
+      await setDoc(doc(db, "pnd_items", f.id), {
+        id: f.id,
+        name: f.name,
+        noteContent: f.noteContent,
+        note: f.note,
+        modified: f.modified,
+        size: f.size,
+        isNote: !!f.isNote,
+        mime: f.mime || "link",
+        fmime: f.fmime || "text/html",
+        cat: f.cat,
+        parent: f.parent,
+        access: levelOf(f)
+      }, { merge: true });
+      scheduleCatalogSync();
+    } catch (e) { console.warn("Lưu nội dung file:", e.message); }
+  }
+  if (st) st.textContent = "✓ Đã lưu lúc " + new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (!silent) { toast("Đã lưu nội dung văn bản “" + f.name + "”.", "ok"); route(); }
+  return true;
+}
+
+async function transferNoteToSpecificDoc(sourceId) {
+  await saveInFileNote(sourceId, true);
+  const src = items[sourceId]; if (!src) return;
+  const sel = $("#inFileTargetDoc"), modeSel = $("#inFileTransferDocMode");
+  const targetId = sel ? sel.value : "";
+  const mode = modeSel ? modeSel.value : "attach";
+  if (!targetId || !items[targetId]) { toast("Hãy chọn một File (Tài liệu) cụ thể cần chuyển vào.", "err"); return; }
+  const target = items[targetId];
+  const now = new Date().toISOString();
+  const attached = Array.isArray(target.attachedNotes) ? target.attachedNotes.slice() : [];
+  const entry = { id: src.id, name: src.name, date: todayISO(), summary: stripHtmlText(src.noteContent || src.note).slice(0, 180) };
+  const idx = attached.findIndex(x => x.id === src.id);
+  if (idx >= 0) attached[idx] = entry; else attached.unshift(entry);
+  target.attachedNotes = attached;
+
+  if (mode === "merge") {
+    const existingHtml = target.noteContent || (target.note ? `<p>${esc(target.note)}</p>` : "");
+    target.noteContent = existingHtml + `<hr><section><h3>📎 ${esc(src.name)} (${fmtDate(todayISO())})</h3>${src.noteContent || ""}</section>`;
+    target.note = ((target.note ? target.note + " | " : "") + "Gộp từ: " + src.name).slice(0, 300);
+  } else {
+    if (!target.noteContent) target.noteContent = src.noteContent || "";
+    if (target.parent && tree[target.parent]) {
+      src.parent = target.parent;
+      src.cat = target.cat || tree[target.parent].cat;
+      src.linkedDocId = target.id;
+      src.linkedDocName = target.name;
+    }
+  }
+  target.modified = now;
+  putLocalNote(src);
+  putLocalNote(target);
+  if (canUp()) {
+    try {
+      await setDoc(doc(db, "pnd_items", target.id), { attachedNotes: target.attachedNotes, noteContent: target.noteContent || "", note: target.note || "", modified: now }, { merge: true });
+      await setDoc(doc(db, "pnd_items", src.id), { parent: src.parent, cat: src.cat, linkedDocId: target.id, linkedDocName: target.name, modified: now }, { merge: true });
+      scheduleCatalogSync();
+    } catch (e) { console.warn("Chuyển vào file đích:", e.message); }
+  }
+  toast("Đã lưu và chuyển văn bản “" + src.name + "” vào file “" + target.name + "”!", "ok");
+  route();
+  openDoc(target.id);
+}
+
+async function transferNoteToSpecificFolder(sourceId, isCopy) {
+  await saveInFileNote(sourceId, true);
+  const src = items[sourceId]; if (!src) return;
+  const sel = $("#inFileTargetFolder");
+  const targetFolder = sel ? sel.value : "";
+  if (!targetFolder || !tree[targetFolder]) { toast("Hãy chọn thư mục đích.", "err"); return; }
+  const folderNode = tree[targetFolder];
+  const now = new Date().toISOString();
+  if (isCopy) {
+    const newId = "note-" + rid();
+    const copyItem = {
+      ...src,
+      id: newId,
+      name: src.name + " (Bản sao)",
+      parent: targetFolder,
+      cat: folderNode.cat,
+      access: canUp() ? folderLevel(targetFolder) : (src.access || "cong-khai"),
+      added: now,
+      modified: now
+    };
+    items[newId] = copyItem;
+    putLocalNote(copyItem);
+    if (canUp()) {
+      try { await setDoc(doc(db, "pnd_items", newId), copyItem); scheduleCatalogSync(); } catch (e) {}
+    }
+    toast("Đã tạo bản sao vào thư mục “" + folderLabel(targetFolder) + "”.", "ok");
+    route();
+    return;
+  }
+  if (src.parent === targetFolder) { toast("File đã nằm trong thư mục này.", "ok"); return; }
+  if (canUp() && driveIdOf(src) && src.mime !== "link" && !src.isNote) {
+    await doMove(src.id, false, targetFolder);
+    return;
+  }
+  src.parent = targetFolder;
+  src.cat = folderNode.cat;
+  delete src.order;
+  src.modified = now;
+  putLocalNote(src);
+  if (canUp()) {
+    try { await setDoc(doc(db, "pnd_items", src.id), { parent: targetFolder, cat: folderNode.cat, modified: now }, { merge: true }); scheduleCatalogSync(); } catch (e) {}
+  }
+  toast("Đã chuyển file “" + src.name + "” sang thư mục “" + folderLabel(targetFolder) + "”!", "ok");
+  route();
+  openDoc(src.id, currentDocMode);
+}
+
+function exportNoteFile(id, kind) {
+  const f = items[id]; if (!f) return;
+  const sheet = $("#inFileSheet");
+  const htmlBody = sheet ? sheet.innerHTML : (f.noteContent || `<p>${esc(f.note || "")}</p>`);
+  const safeName = (f.name || "van-ban-ghi-chu").replace(/[\\/:*?"<>|]+/g, "_");
+  if (kind === "txt") {
+    const txt = (f.name || "") + "\n" + "=".repeat(40) + "\n\n" + stripHtmlText(htmlBody);
+    const blob = new Blob(["\uFEFF" + txt], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = safeName + ".txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast("Đã tải về tệp " + safeName + ".txt", "ok");
+    return;
+  }
+  if (kind === "doc") {
+    const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc(f.name)}</title><style>body{font-family:'Times New Roman',serif;font-size:14pt;line-height:1.5}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px}</style></head><body>${htmlBody}</body></html>`;
+    const blob = new Blob(["\uFEFF" + docHtml], { type: "application/msword;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = safeName + ".doc";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast("Đã xuất file Word: " + safeName + ".doc", "ok");
+    return;
+  }
+  if (kind === "print") {
+    const w = window.open("", "_blank", "width=850,height=700");
+    if (!w) { toast("Hãy cho phép mở cửa sổ bật lên để in / lưu PDF.", "err"); return; }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(f.name)}</title><style>body{font:14pt/1.6 "Times New Roman",serif;margin:25mm 20mm;color:#000}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:6px}</style></head><body>${htmlBody}<script>window.onload=()=>{setTimeout(()=>{window.print();},250);}<\/script></body></html>`);
+    w.document.close();
+  }
+}
+
+async function deleteDocItem(id) {
+  const f = items[id]; if (!f) return;
+  if (!canUp() && !f.isLocalNote && !f.isNote) {
+    openLogin("Xóa tài liệu cần tài khoản Thủ thư / Biên mục hoặc Quản trị.");
+    return;
+  }
+  const did = driveIdOf(f);
+  const msg = "Bạn có chắc chắn muốn xóa file “" + f.name + "” khỏi thư viện?" + (did && canUp() ? "\n(Tệp gốc trên Google Drive cũng sẽ được chuyển vào Thùng rác)." : "");
+  if (!await ask(msg, { title: "XÓA FILE TÀI LIỆU", ok: "Xóa file" })) return;
+  try {
+    if (did && canUp() && f.mime !== "link" && !f.isNote) {
+      try {
+        await drive("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(did) + "?fields=id&supportsAllDrives=true", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trashed: true })
+        });
+      } catch (e) { console.warn("Chuyển tệp Drive vào thùng rác:", e.message); }
+    }
+    if (canUp()) {
+      const ops = [{ type: "del", ref: doc(db, "pnd_items", id) }];
+      if (catalog[id]) ops.push({ type: "del", ref: doc(db, "pnd_catalog", id) });
+      await commitOps(ops);
+      await logAct("FILE_DEL", f.name);
+    }
+    delete items[id];
+    delete catalog[id];
+    delLocalNote(id);
+    if (f.star) {
+      thongDung = thongDung.filter(s => s.id !== id);
+      if (canUp()) try { await setDoc(doc(db, "pnd_settings", "thongdung"), { items: thongDung }); } catch (e) {}
+    }
+    try {
+      const c = JSON.parse(localStorage.getItem("pnd_live2") || "null");
+      if (c && c.items && c.items[id]) { delete c.items[id]; localStorage.setItem("pnd_live2", JSON.stringify(c)); }
+    } catch (e) {}
+    if ($("#dlgDoc").open && currentOpenDocId === id) $("#dlgDoc").close();
+    toast("Đã xóa file “" + f.name + "”.", "ok");
+    route();
+  } catch (x) {
+    toast("Chưa xóa được file: " + (x.message || x), "err");
+  }
+}
+
+/* ---------- Chi tiết tài liệu (xem trước Google Drive & Soạn thảo trực tiếp trong file) ---------- */
+function openDoc(id, forceMode) {
+  const f = items[id]; if (!f) return;
+  currentOpenDocId = id;
+  const did = driveIdOf(f), k = fmtOf(f);
+  const isNoteFile = !!(f.isNote || k === "note" || (!did && f.noteContent));
+  const hasOriginalView = !!(did || (f.link && /^https?:\/\//.test(f.link)));
+  currentDocMode = forceMode || (isNoteFile ? "edit" : "view");
+  $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
+  if (f.locked) {
+    $("#docPreview").innerHTML = `<div class="pv-card"><div style="font-size:34px">🔒</div><h4>Bạn chưa được mở tài liệu này</h4><p class="muted">${esc(lockReason(f))}</p>${myGrant() ? "" : '<button type="button" class="btn primary" data-login>Đăng nhập</button>'}</div>`;
+  } else if (currentDocMode === "edit") {
+    $("#docPreview").innerHTML = inFileEditorHTML(f, hasOriginalView);
+    const tf = $("#inFileTargetFolder");
+    if (tf && f.parent && tree[f.parent]) tf.value = f.parent;
+    const sheet = $("#inFileSheet");
+    if (sheet) {
+      let autoSaveT = null;
+      sheet.addEventListener("input", () => {
+        const st = $("#inFileSaveStatus");
+        if (st) st.textContent = "Đang soạn thảo (tự lưu nháp)…";
+        clearTimeout(autoSaveT);
+        autoSaveT = setTimeout(() => saveInFileNote(f.id, true), 1200);
+      });
+      sheet.addEventListener("keydown", e => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          saveInFileNote(f.id, false);
+        }
+      });
+    }
+  } else {
+    const modeHeader = `<div class="infile-mode-bar" style="position:absolute;top:0;left:0;right:0;z-index:4;background:rgba(25,53,83,.92)"><div class="infile-mode-tabs"><button type="button" class="infile-tab on" data-docmode="view">👁 Xem tài liệu gốc</button><button type="button" class="infile-tab" data-docmode="edit">✎ Soạn thảo văn bản / Ghi chú trong file</button></div></div>`;
+    $("#docPreview").innerHTML = did
+      ? `${modeHeader}<iframe style="margin-top:42px;min-height:calc(62vh - 42px)" src="https://drive.google.com/file/d/${encodeURIComponent(did)}/preview" allow="autoplay" title="Xem trước tài liệu"></iframe>${canDl() ? "" : '<span class="pv-shield" style="top:42px" title="Tài khoản chỉ được xem, không tải về"></span>'}`
+      : f.link && /^https?:\/\//.test(f.link)
+        ? `${modeHeader}<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
+        : inFileEditorHTML(f, false);
+  }
+  const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Mức truy cập", LV[levelOf(f)].name], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Gắn với file", f.linkedDocName], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
+  const attachedHTML = Array.isArray(f.attachedNotes) && f.attachedNotes.length
+    ? `<div class="attached-notes-box"><h5>📌 Văn bản ghi chú đã chuyển vào file này (${f.attachedNotes.length})</h5>${f.attachedNotes.map(n => `<div class="attached-note-item"><span><b>${esc(n.name)}</b> <small class="muted">(${fmtDate(n.date)})</small></span>${items[n.id] ? `<button type="button" class="btn sm" data-doc="${esc(n.id)}">Mở</button>` : ""}</div>`).join("")}</div>`
+    : "";
+  $("#docInfo").innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${a === "Tình trạng" ? `<span class="st-chip ${stCls(b)}">${esc(b)}</span>` : a === "Mức truy cập" ? lvChip(levelOf(f)) : esc(b)}</dd>`).join("") + `<dd style="grid-column:1/-1">${attachedHTML}</dd>`;
   const acts = [];
-  if (f.locked) { $("#docActs").innerHTML = ""; $("#dlgDoc").showModal(); return; }
-  if (f.link && (!did || canDl())) acts.push(`<a class="btn primary" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
+  if (f.locked) { $("#docActs").innerHTML = ""; if (!$("#dlgDoc").open) $("#dlgDoc").showModal(); return; }
+  acts.push(`<button type="button" class="btn ${currentDocMode === "edit" ? "green" : "primary"}" data-docmode="${currentDocMode === "edit" ? (hasOriginalView ? "view" : "edit") : "edit"}">${currentDocMode === "edit" ? (hasOriginalView ? "👁 Chuyển sang Xem file gốc" : "✎ Đang ở chế độ Soạn thảo trong file") : "✎ Soạn thảo văn bản / Ghi chú trong file"}</button>`);
+  if (f.link && /^https?:\/\//.test(f.link) && (!did || canDl())) acts.push(`<a class="btn" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
   if (did && !canDl()) acts.push(`<p class="muted" style="margin:0">Quyền của bạn: chỉ xem trực tuyến, không tải về.</p>`);
   if (did && canDl() && !/google-apps/.test(f.fmime || f.mime)) acts.push(`<a class="btn" href="https://drive.google.com/uc?export=download&id=${encodeURIComponent(did)}" target="_blank" rel="noopener">Tải về máy</a>`);
   if (canUp()) acts.push(`<button type="button" class="btn" data-edit="${esc(f.id)}">Sửa thông tin</button>`, `<button type="button" class="btn" data-move="${esc(f.id)}">Chuyển thư mục</button>`);
+  if (canUp() || f.isLocalNote || f.isNote) acts.push(`<button type="button" class="btn danger" data-del="${esc(f.id)}">🗑 Xóa file</button>`);
   $("#docActs").innerHTML = acts.join("");
-  $("#dlgDoc").showModal();
+  if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
 }
-$("#dlgDoc").addEventListener("close", () => { $("#docPreview").innerHTML = ""; });
+$("#dlgDoc").addEventListener("close", () => { if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
 
 /* ---------- Tìm kiếm ---------- */
 let searchCache = { q: null, hits: null };
@@ -924,7 +1397,7 @@ async function publicList(id) {
   } while (page);
   return out;
 }
-const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added", "access", "coverUrl", "coverFileId"];
+const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added", "access", "coverUrl", "coverFileId", "isNote", "noteContent", "attachedNotes", "linkedDocId", "linkedDocName", "fmime"];
 const TREE_KEEP = ["order", "imageUrl", "imageFileId", "access", "desc"];
 async function loadLive() {
   if (!settings || !CFG.DRIVE_KEY || !canUp()) return false;
@@ -937,10 +1410,12 @@ async function loadLive() {
     }
     catch (e) { if (isAdmin && driveTok) res = await buildFromDrive(listChildren, true, null, allow); else throw e; }
     const { newTree, newItems } = res;
+    const gcRoot = catRootId("bst-ghi-chu");
+    if (gcRoot && !newTree[gcRoot]) newTree[gcRoot] = tree[gcRoot] || { id: gcRoot, name: (CAT["bst-ghi-chu"] && CAT["bst-ghi-chu"].name) || "Ghi chú", parent: (settings && settings.rootId) || "root", cat: "bst-ghi-chu", depth: 1 };
     const meta = items; // dữ liệu ghi chú và thứ tự đã tải từ Firestore
     for (const [id, n] of Object.entries(newTree)) if (tree[id]) { for (const k of TREE_KEEP) if (tree[id][k] !== undefined) n[k] = tree[id][k]; }
     for (const [id, it] of Object.entries(newItems)) if (meta[id]) { for (const k of [...META, "order"]) if (meta[id][k] !== undefined) it[k] = meta[id][k]; if (meta[id].name) it.name = meta[id].name; }
-    for (const [id, m] of Object.entries(meta)) if (m.mime === "link" && newTree[m.parent]) newItems[id] = m; // tài liệu dạng link
+    for (const [id, m] of Object.entries(meta)) if ((m.mime === "link" || m.isNote) && (newTree[m.parent] || m.cat === "bst-ghi-chu")) newItems[id] = m; // tài liệu dạng link & văn bản ghi chú
     if (isAdmin) for (const [id, n] of Object.entries(tree)) if (n.cat === "cho" && !newTree[id]) newTree[id] = n; // giữ Chờ phân loại khi đọc công khai
     if (isAdmin) for (const [id, m] of Object.entries(meta)) if (m.cat === "cho" && !newItems[id]) newItems[id] = m;
     tree = newTree; items = newItems; liveState = "ok";
@@ -962,7 +1437,7 @@ async function scanDrive(silent) {
     for (const [id, v] of Object.entries(newTree)) { const saved = oldTree[id] || {}; for (const k of TREE_KEEP) if (saved[k] !== undefined) v[k] = saved[k]; if (JSON.stringify(saved) !== JSON.stringify(v)) ops.push({ type: "set", ref: doc(db, "pnd_tree", id), data: v }); }
     for (const id of Object.keys(oldTree)) if (!newTree[id]) ops.push({ type: "del", ref: doc(db, "pnd_tree", id) });
     for (const [id, v] of Object.entries(newItems)) { const o = oldItems[id] || {}; if (!o.access) v.access = folderLevel(v.parent, newTree); if (!o.access || ["name", "mime", "link", "modified", "size", "cat", "parent", "shared"].some(k => o[k] !== v[k])) ops.push({ type: "merge", ref: doc(db, "pnd_items", id), data: v }); }
-    for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link") ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
+    for (const [id, o] of Object.entries(oldItems)) if (!newItems[id] && o.mime !== "link" && !o.isNote) ops.push({ type: "del", ref: doc(db, "pnd_items", id) });
     await commitOps(ops);
     await logAct("SCAN", n + " tệp, " + Object.keys(newTree).length + " thư mục");
     settings.lastScan = Date.now(); await setDoc(doc(db, "pnd_settings", "root"), { lastScan: settings.lastScan }, { merge: true });
@@ -1758,7 +2233,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -1769,6 +2244,57 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-adminlogin")) openLogin("Đăng nhập bằng tài khoản quản trị.");
   else if (t.dataset.edit) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openEdit(t.dataset.edit); }
   else if (t.dataset.move) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); moveTo(t.dataset.move, false); }
+  else if (t.dataset.del) { e.preventDefault(); deleteDocItem(t.dataset.del); }
+  else if (t.hasAttribute("data-newnote")) {
+    e.preventDefault();
+    const h = decodeURIComponent(location.hash.slice(1)), cur = currentCatKey();
+    const folderId = h.startsWith("f/") && tree[h.slice(2)] ? h.slice(2) : (cur && catRootId(cur) ? catRootId(cur) : catRootId("bst-ghi-chu"));
+    if (cur !== "bst-ghi-chu" && !h.startsWith("f/")) {
+      go("dm/bst-ghi-chu");
+      setTimeout(() => { const inp = $("#quickNoteName"); if (inp) inp.focus(); }, 100);
+    } else {
+      const box = $("#noteCreateBox");
+      if (box && box.hidden) { box.hidden = false; const inp = $("#quickNoteName"); if (inp) inp.focus(); }
+      else createNoteDocument(folderId);
+    }
+  }
+  else if (t.dataset.togglenote) {
+    e.preventDefault();
+    const box = $("#noteCreateBox");
+    if (box) { box.hidden = !box.hidden; if (!box.hidden && $("#quickNoteName")) $("#quickNoteName").focus(); }
+    else createNoteDocument(t.dataset.togglenote);
+  }
+  else if (t.dataset.quicknote) { e.preventDefault(); createNoteDocument(t.dataset.quicknote); }
+  else if (t.dataset.docmode) {
+    e.preventDefault();
+    if (currentOpenDocId) {
+      if (currentDocMode === "edit" && t.dataset.docmode === "view") saveInFileNote(currentOpenDocId, true);
+      openDoc(currentOpenDocId, t.dataset.docmode);
+    }
+  }
+  else if (t.dataset.notesave) { e.preventDefault(); saveInFileNote(t.dataset.notesave, false); }
+  else if (t.dataset.edcmd) {
+    e.preventDefault();
+    const sheet = $("#inFileSheet");
+    if (sheet) { sheet.focus(); document.execCommand(t.dataset.edcmd, false, null); }
+  }
+  else if (t.dataset.edins) {
+    e.preventDefault();
+    const sheet = $("#inFileSheet");
+    if (sheet) {
+      sheet.focus();
+      const k = t.dataset.edins;
+      if (k === "table") document.execCommand("insertHTML", false, `<table><thead><tr><th>STT</th><th>Nội dung</th><th>Ghi chú</th></tr></thead><tbody><tr><td>1</td><td>…</td><td>…</td></tr><tr><td>2</td><td>…</td><td>…</td></tr></tbody></table><p></p>`);
+      else if (k === "check") document.execCommand("insertHTML", false, `<p>☐ Nội dung cần kiểm tra / thực hiện…</p>`);
+      else if (k === "date") document.execCommand("insertHTML", false, `<span><i>(Ngày ${fmtDate(todayISO())})</i> </span>`);
+    }
+  }
+  else if (t.dataset.transferdoc) { e.preventDefault(); transferNoteToSpecificDoc(t.dataset.transferdoc); }
+  else if (t.dataset.transferfolder) { e.preventDefault(); transferNoteToSpecificFolder(t.dataset.transferfolder, false); }
+  else if (t.dataset.copyfolder) { e.preventDefault(); transferNoteToSpecificFolder(t.dataset.copyfolder, true); }
+  else if (t.dataset.exportdoc) { e.preventDefault(); exportNoteFile(t.dataset.exportdoc, "doc"); }
+  else if (t.dataset.exporttxt) { e.preventDefault(); exportNoteFile(t.dataset.exporttxt, "txt"); }
+  else if (t.dataset.printnote) { e.preventDefault(); exportNoteFile(t.dataset.printnote, "print"); }
   else if (t.dataset.doc) { e.preventDefault(); openDoc(t.dataset.doc); }
   else if (t.dataset.view) { view = t.dataset.view; try { localStorage.setItem("pnd_view", view); } catch (x) {} route(); }
   else if (t.hasAttribute("data-freset")) { filt = { year: "", fmt: "", status: "", sort: "" }; route(); }
@@ -1782,6 +2308,22 @@ document.addEventListener("click", e => {
   else if (t.dataset.fdesc) setFolderDesc(t.dataset.fdesc);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f) openDoc(f.id); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
+});
+document.addEventListener("change", e => {
+  const b = e.target.closest && e.target.closest("[data-edblock],[data-edsize]");
+  if (!b) return;
+  const sheet = $("#inFileSheet");
+  if (!sheet) return;
+  sheet.focus();
+  if (b.hasAttribute("data-edblock")) document.execCommand("formatBlock", false, b.value);
+  else if (b.hasAttribute("data-edsize")) document.execCommand("fontSize", false, b.value);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target && e.target.id === "quickNoteName") {
+    e.preventDefault();
+    const btn = document.querySelector("[data-quicknote]");
+    if (btn) createNoteDocument(btn.dataset.quicknote);
+  }
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
 $("#btnLogin").onclick = () => openLogin();

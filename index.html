@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261110d">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261111a">
 </head>
 <body>
 <header class="top">
@@ -19,6 +19,7 @@
       <span class="brand-name">PHÚC NGUYÊN DIGITAL</span>
     </a>
     <nav class="top-act" aria-label="Thao tác">
+      <button type="button" class="tbtn hl" id="btnNewNoteTop" data-newnote>📝 Tạo văn bản ghi chú</button>
       <button type="button" class="tbtn hl up-only" id="btnUpload">＋ Tải tài liệu lên</button>
       <button type="button" class="tbtn up-only" data-go="thu-muc">Thư mục</button>
       <button type="button" class="tbtn admin-only" data-go="tai-khoan">Tài khoản & phân quyền</button>
@@ -62,6 +63,7 @@
     <section class="sbox">
       <h3 class="sbox-title">CÔNG CỤ</h3>
       <button type="button" class="sbtn primary" id="btnAI">Hỏi trợ lý AI</button>
+      <button type="button" class="sbtn" data-newnote style="border-color:var(--forest);color:var(--forest)">📝 Tạo văn bản bằng ghi chú</button>
       <button type="button" class="sbtn" id="btnPw" hidden>Đổi mật khẩu</button>
       <div class="up-only" id="adminTools">
         <button type="button" class="sbtn" data-go="thu-muc">Quản lý thư mục</button>
@@ -232,7 +234,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="./config.js?v=20261110d"></script>
-<script type="module" src="./assets/pnd.js?v=20261110d"></script>
+<script src="./config.js?v=20261111a"></script>
+<script type="module" src="./assets/pnd.js?v=20261111a"></script>
 </body>
 </html>
