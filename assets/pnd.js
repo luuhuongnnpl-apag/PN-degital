@@ -768,7 +768,23 @@ function inFileEditorHTML(f, hasOriginalView) {
       <button type="button" data-edcmd="removeFormat" title="Xóa định dạng">⌫</button>
       <span class="sep"></span>
       <button type="button" class="dict-btn" data-dictate title="Bấm để bắt đầu nói, chữ hiện vào văn bản tại vị trí con trỏ. Bấm lần nữa để dừng.">🎤 Đọc chính tả</button>
+      <button type="button" class="mtg-btn" data-mtgpanel title="Ghi âm cuộc họp, chuyển thành chữ và tóm tắt trực tiếp">🎙 Ghi cuộc họp</button>
       <label class="dict-opt" title="Gemini tự thêm dấu câu, viết hoa cho từng câu vừa đọc"><input type="checkbox" id="dictPunct"${dictPunctOn() ? " checked" : ""}> Tự thêm dấu câu</label>
+    </div>
+    <div class="mtg-panel" id="mtgPanel" hidden>
+      <div class="mtg-head"><b>🎙 Ghi &amp; tóm tắt cuộc họp</b><span class="mtg-clock" id="mtgClock">00:00</span><span id="mtgStatus" class="muted">Chưa ghi. Điền người dự và từ điển riêng (nếu có) rồi bấm Bắt đầu.</span></div>
+      <div class="mtg-grid">
+        <label>Người dự họp <small class="muted">(mỗi người một dòng, có thể kèm chức danh)</small><textarea id="mtgPeople" rows="3" placeholder="VD: Nguyễn Văn A – Trưởng khoa&#10;Trần Thị B – Phó Trưởng khoa">${esc(mtgGet("pnd_mtg_people"))}</textarea></label>
+        <label>Từ điển riêng <small class="muted">(tên riêng, thuật ngữ, số hiệu văn bản hay dùng; lưu lại cho lần sau)</small><textarea id="mtgTerms" rows="3" placeholder="VD: Học viện Hành chính và Quản trị công; đề cương chi tiết; chứng thực bản sao; Nghị định 23/2015/NĐ-CP">${esc(mtgGet("pnd_mtg_terms"))}</textarea></label>
+      </div>
+      <div class="mtg-row">
+        <label class="muted">Chuyển thành chữ mỗi <select id="mtgEvery"><option value="2">2 phút</option><option value="3" selected>3 phút</option><option value="5">5 phút</option></select></label>
+        <button type="button" class="btn primary sm" data-mtgstart>● Bắt đầu ghi</button>
+        <button type="button" class="btn sm" data-mtgnow disabled title="Chuyển ngay phần vừa nói thành chữ, không chờ hết chu kỳ">⟳ Chuyển đoạn này ngay</button>
+        <button type="button" class="btn danger sm" data-mtgstop disabled>■ Kết thúc &amp; tóm tắt</button>
+        <button type="button" class="btn sm" data-mtgrename title="Đổi Người 1, Người 2… thành tên thật trong toàn bộ bản ghi">👤 Đổi tên người nói</button>
+      </div>
+      <div class="mtg-live" id="mtgLive" hidden></div>
     </div>
     <div class="dict-live" id="dictLive" hidden><span class="dict-dot"></span><b>Đang nghe…</b> <span id="dictInterim" class="muted">Mời sếp nói. Bấm “⏹ Dừng ghi” khi xong.</span></div>
     <div class="infile-canvas">
@@ -1081,7 +1097,8 @@ function openDoc(id, forceMode) {
   $("#docActs").innerHTML = acts.join("");
   if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
 }
-$("#dlgDoc").addEventListener("close", () => { stopDictation(); if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
+$("#dlgDoc").addEventListener("cancel", e => { if (mtgS && mtgS.recording) { e.preventDefault(); toast("Đang ghi cuộc họp — bấm “■ Kết thúc & tóm tắt” trước khi đóng.", "err"); } });
+$("#dlgDoc").addEventListener("close", () => { stopDictation(); mtgAbort(); mtgS = null; if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
 
 /* ---------- Tìm kiếm ---------- */
 let searchCache = { q: null, hits: null };
@@ -2236,7 +2253,7 @@ function dictCaretRange(sheet) {
   if (last && /^(P|DIV|H\d|BLOCKQUOTE|LI)$/.test(last.tagName)) r.selectNodeContents(last);
   r.collapse(false); return r;
 }
-function toggleDictation() { if (dict) stopDictation(); else startDictation(); }
+function toggleDictation() { if (dict) stopDictation(); else if (typeof mtgS !== "undefined" && mtgS && mtgS.recording) toast("Đang ghi cuộc họp — micro đang được dùng cho phần ghi họp.", "err"); else startDictation(); }
 function startDictation() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const sheet = $("#inFileSheet");
@@ -2378,10 +2395,328 @@ async function askAI(e) {
   } catch (x) { bot.textContent = "Chưa hỏi được: " + (x.message || x); aiChat = null; }
 }
 
+
+/* ---------- Ghi & tóm tắt cuộc họp (Gemini nghe âm thanh, chép lời, tóm tắt trực tiếp) ---------- */
+// Âm thanh chỉ giữ trong bộ nhớ trình duyệt khi ghi chú đang mở (để nghe lại chỗ "không rõ"); đóng ghi chú là bỏ, không lưu lên đâu.
+let mtgS = null, mtgModel = null;
+const MTG_OVERLAP = 5000;
+function mtgGet(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+function mtgSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function mtgFmt(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return (h ? h + ":" + String(m).padStart(2, "0") : String(m).padStart(2, "0")) + ":" + String(x).padStart(2, "0"); }
+function mtgSec(str) { const p = String(str).split(":").map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : (p[0] || 0) * 60 + (p[1] || 0); }
+function mtgNow(m) { return (performance.now() - m.t0) / 1000; }
+function mtgStatus(txt) { const el = $("#mtgStatus"); if (el) el.textContent = txt; }
+async function getMtgModel() {
+  if (mtgModel) return mtgModel;
+  const { mod, ai } = await getAIInst();
+  mtgModel = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", generationConfig: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } } });
+  return mtgModel;
+}
+function mtgUI(on) {
+  const q = s => document.querySelector(s);
+  if (q("[data-mtgstart]")) q("[data-mtgstart]").disabled = on;
+  if (q("[data-mtgstop]")) q("[data-mtgstop]").disabled = !on;
+  if (q("[data-mtgnow]")) q("[data-mtgnow]").disabled = !on;
+  if (q("#mtgEvery")) q("#mtgEvery").disabled = on;
+  const b = q("[data-mtgpanel]"); if (b) b.classList.toggle("on", on);
+  const live = $("#mtgLive"); if (live) { live.hidden = !on; if (on) live.textContent = "Bản nghe nhanh (nháp) sẽ hiện ở đây…"; }
+}
+async function mtgStart() {
+  if (mtgS && mtgS.recording) return;
+  const sheet = $("#inFileSheet"); if (!sheet) return;
+  if (!myGrant()) { openLogin("Đăng nhập để dùng ghi & tóm tắt cuộc họp (cần Gemini)."); return; }
+  if (!window.MediaRecorder || !navigator.mediaDevices) { toast("Trình duyệt chưa hỗ trợ ghi âm. Sếp dùng Chrome hoặc Edge bản mới.", "err"); return; }
+  stopDictation();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } }); }
+  catch (e) { toast("Chưa được dùng micro. Sếp bấm biểu tượng ổ khóa cạnh địa chỉ web → cho phép Micro, rồi bấm lại.", "err"); return; }
+  try { await getMtgModel(); } catch (e) { stream.getTracks().forEach(t => t.stop()); toast("Chưa kết nối được Gemini: " + (e.message || e), "err"); return; }
+  const started = new Date();
+  const block = document.createElement("div");
+  block.className = "mtg-block";
+  block.innerHTML = `<h2>Ghi chép cuộc họp – ${started.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" })}</h2><h3>I. Tóm tắt nội dung</h3><div class="mtg-summary"><p><i>Bản tóm tắt sẽ hiện sau đoạn ghi âm đầu tiên…</i></p></div><h3>II. Bản ghi lời</h3><div class="mtg-transcript"></div>`;
+  sheet.appendChild(block);
+  const after = document.createElement("p"); after.innerHTML = "<br>"; sheet.appendChild(after);
+  mtgS = { recording: true, stream, sheet, block, t0: performance.now(), every: (+($("#mtgEvery") || {}).value || 3) * 60000,
+    people: ($("#mtgPeople") || {}).value || "", terms: ($("#mtgTerms") || {}).value || "",
+    segs: [], next: 0, busy: false, transcript: [], sumBusy: false, sumAgain: false, finished: false, wake: null, sr: null, lastCut: 0 };
+  mtgNewRecorder(mtgS);
+  mtgS.timer = setInterval(() => mtgTick(mtgS), 1000);
+  try { if (navigator.wakeLock) mtgS.wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+  mtgLiveDraft(mtgS);
+  mtgUI(true);
+  mtgStatus("Đang ghi… đoạn đầu sẽ thành chữ sau " + (mtgS.every / 60000) + " phút.");
+  sheet.dispatchEvent(new Event("input"));
+  toast("Đã bắt đầu ghi cuộc họp. Giữ ghi chú này mở trong suốt cuộc họp.", "ok");
+}
+function mtgTick(m) {
+  if (!m.recording) return;
+  const now = mtgNow(m);
+  const c = $("#mtgClock"); if (c) c.textContent = "● " + mtgFmt(now);
+  if (now - m.lastCut >= m.every / 1000) mtgRotate(false);
+}
+function mtgNewRecorder(m) {
+  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "");
+  const rec = new MediaRecorder(m.stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : {});
+  const seg = { idx: m.segs.length, rec, parts: [], start: mtgNow(m), end: null, blob: null, status: "rec" };
+  seg.el = document.createElement("div");
+  seg.el.className = "mtg-chunk";
+  seg.el.innerHTML = `<p class="mtg-wait">⏺ Đang ghi đoạn từ ${mtgFmt(seg.start)}…</p>`;
+  const tr = m.block.querySelector(".mtg-transcript"); if (tr) tr.appendChild(seg.el);
+  rec.ondataavailable = e => { if (e.data && e.data.size) seg.parts.push(e.data); };
+  rec.onstop = () => {
+    seg.blob = new Blob(seg.parts, { type: rec.mimeType || "audio/webm" }); seg.parts = null;
+    if (seg.end == null) seg.end = mtgNow(m);
+    seg.status = "ready";
+    if (seg.el.isConnected) seg.el.innerHTML = `<p class="mtg-wait">⏳ Đang chuyển thành chữ đoạn ${mtgFmt(seg.start)}–${mtgFmt(seg.end)}…</p>`;
+    mtgDrain(m);
+  };
+  rec.start(1000);
+  m.segs.push(seg); m.cur = seg;
+  return seg;
+}
+// Cắt đoạn: mở đoạn mới trước, 5 giây sau mới dừng đoạn cũ (chồng 5 giây để không mất chữ ở chỗ nối)
+function mtgRotate(manual) {
+  const m = mtgS; if (!m || !m.recording) return;
+  const old = m.cur;
+  if (manual && mtgNow(m) - old.start < 10) return;
+  m.lastCut = mtgNow(m);
+  mtgNewRecorder(m);
+  setTimeout(() => { old.end = mtgNow(m); try { old.rec.stop(); } catch (e) {} }, MTG_OVERLAP);
+  if (manual) mtgStatus("Đang chuyển đoạn vừa nói thành chữ…");
+}
+function mtgStop() {
+  const m = mtgS; if (!m || !m.recording) return;
+  m.recording = false; m.finished = true;
+  clearInterval(m.timer);
+  const cur = m.cur; cur.end = mtgNow(m);
+  try { cur.rec.stop(); } catch (e) {}
+  setTimeout(() => { m.stream.getTracks().forEach(t => t.stop()); }, MTG_OVERLAP + 500);
+  if (m.sr) { try { m.sr.onend = null; m.sr.stop(); } catch (e) {} m.sr = null; }
+  try { if (m.wake) m.wake.release(); } catch (e) {}
+  mtgUI(false);
+  const c = $("#mtgClock"); if (c) c.textContent = "■ " + mtgFmt(cur.end);
+  mtgStatus("Đã dừng ghi. Đang chuyển nốt phần cuối thành chữ và lập bản tóm tắt cuối…");
+}
+function mtgAbort() {
+  const m = mtgS; if (!m) return;
+  if (m.recording) {
+    m.recording = false; clearInterval(m.timer);
+    m.segs.forEach(sg => { try { sg.rec.onstop = null; sg.rec.stop(); } catch (e) {} });
+    m.stream.getTracks().forEach(t => t.stop());
+    if (m.sr) { try { m.sr.onend = null; m.sr.stop(); } catch (e) {} }
+    try { if (m.wake) m.wake.release(); } catch (e) {}
+  }
+  m.aborted = true;
+}
+window.addEventListener("beforeunload", e => { if (mtgS && mtgS.recording) { e.preventDefault(); e.returnValue = ""; } });
+// Bản nghe nhanh (nháp) hiện ngay trong khung, chỉ để theo dõi; bản chính thức do Gemini nghe lại âm thanh
+function mtgLiveDraft(m) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
+  let fin = "";
+  const start = () => {
+    if (!m.recording) return;
+    const rec = new SR(); rec.lang = "vi-VN"; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = ev => {
+      let it = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) fin += r[0].transcript + ". "; else it += r[0].transcript; }
+      fin = fin.slice(-400);
+      const live = $("#mtgLive"); if (live) live.textContent = "Nghe nhanh (nháp): …" + (fin + it).slice(-260);
+    };
+    rec.onerror = () => {};
+    rec.onend = () => { if (m.recording && m.sr === rec) setTimeout(start, 300); };
+    m.sr = rec;
+    try { rec.start(); } catch (e) {}
+  };
+  start();
+}
+function blobToB64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = rej; fr.readAsDataURL(blob); }); }
+async function toWav16k(blob) {
+  const buf = await blob.arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  let audio;
+  try { audio = await ctx.decodeAudioData(buf); } finally { try { ctx.close(); } catch (e) {} }
+  const rate = 16000, len = Math.max(1, Math.ceil(audio.duration * rate));
+  const off = new OfflineAudioContext(1, len, rate);
+  const src = off.createBufferSource(); src.buffer = audio; src.connect(off.destination); src.start();
+  const d = (await off.startRendering()).getChannelData(0);
+  const ab = new ArrayBuffer(44 + d.length * 2), v = new DataView(ab);
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + d.length * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, d.length * 2, true);
+  for (let i = 0, o = 44; i < d.length; i++, o += 2) { const x = Math.max(-1, Math.min(1, d[i])); v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+  return new Blob([ab], { type: "audio/wav" });
+}
+async function mtgTranscribe(m, seg) {
+  let audio, mime = "audio/wav";
+  try { audio = await toWav16k(seg.blob); } catch (e) { audio = seg.blob; mime = (seg.blob.type || "audio/webm").split(";")[0]; }
+  const b64 = await blobToB64(audio);
+  const tail = m.transcript.slice(-6).join("\n");
+  const speakers = [...new Set(m.transcript.join("\n").match(/^\[[\d:]+\]\s*([^:\n]{1,40}):/gm) || [])].map(x => x.replace(/^\[[\d:]+\]\s*/, "").replace(/:$/, "")).slice(0, 15);
+  const prompt = `Đây là một đoạn ghi âm cuộc họp bằng tiếng Việt, bắt đầu tại thời điểm ${mtgFmt(seg.start)} của cuộc họp. Người nói có thể dùng giọng Bắc, Trung, Nam hoặc giọng địa phương; hãy nghe kỹ theo ngữ cảnh.
+Nhiệm vụ: chép lại NGUYÊN VĂN lời nói thành chữ tiếng Việt, đủ dấu câu, đúng chính tả.
+Quy tắc:
+- Mỗi lượt lời một dòng, dạng: [mm:ss] Người N: nội dung. Thời điểm tính từ đầu cuộc họp, tức là cộng thêm ${mtgFmt(seg.start)} vào thời điểm trong đoạn này.
+- Phân biệt người nói theo giọng. Giữ nhất quán nhãn người nói với các đoạn trước${speakers.length ? " (đã có: " + speakers.join(", ") + ")" : ""}. Nếu người nói tự giới thiệu hoặc được gọi tên và người đó có trong danh sách người dự thì dùng tên thật thay cho "Người N".
+- Chỗ nghe không rõ hoặc không chắc chắn: KHÔNG đoán, ghi [không rõ mm:ss].
+- Bỏ tiếng ồn, tiếng ậm ừ, lặp từ vô nghĩa. Không tóm tắt, không bình luận, không thêm nội dung.
+- Khoảng 5 giây đầu đoạn có thể trùng với cuối đoạn trước: bỏ phần đã có ở cuối đoạn trước.
+- Nếu đoạn không có lời nói, chỉ trả về: (không có lời nói)
+${m.people.trim() ? "\nNgười dự họp:\n" + m.people.trim() + "\n" : ""}${m.terms.trim() ? "\nTừ điển riêng (khi nghe thấy thì viết đúng như sau):\n" + m.terms.trim() + "\n" : ""}${tail ? "\nCuối đoạn trước (chỉ để nối mạch, không chép lại):\n" + tail + "\n" : ""}`;
+  const model = await getMtgModel();
+  const r = await model.generateContent([{ inlineData: { mimeType: mime, data: b64 } }, { text: prompt }]);
+  return (r.response.text() || "").trim();
+}
+function mtgLineHTML(line) {
+  let h = esc(line);
+  h = h.replace(/\[không rõ\s*(\d{1,2}:\d{2}(?::\d{2})?)\]/gi, (a, ts) => `<span class="mtg-unclear" data-mtgplay="${mtgSec(ts)}" title="Bấm để nghe lại đoạn này" contenteditable="false">[không rõ ${ts} ▶]</span>`);
+  h = h.replace(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:]{1,40}):/, (a, ts, who) => `<span class="mtg-ts">[${ts}]</span> <b>${who}:</b>`);
+  return `<p>${h}</p>`;
+}
+async function mtgDrain(m) {
+  if (m.busy || m.aborted) return;
+  m.busy = true;
+  try {
+    while (m.segs[m.next] && m.segs[m.next].status === "ready" && !m.aborted) {
+      const seg = m.segs[m.next];
+      let txt = null, err = null;
+      for (let k = 0; k < 2 && txt == null; k++) {
+        try { txt = await mtgTranscribe(m, seg); } catch (e) { err = e; if (k === 0) await new Promise(r => setTimeout(r, 5000)); }
+      }
+      if (m.aborted) break;
+      if (txt == null) {
+        seg.status = "failed";
+        if (seg.el.isConnected) seg.el.innerHTML = `<p class="mtg-err" contenteditable="false">⚠ Chưa chuyển được đoạn ${mtgFmt(seg.start)}–${mtgFmt(seg.end)} (${esc((err && err.message) || "lỗi kết nối")}). <button type="button" class="btn sm" data-mtgretry="${seg.idx}">Thử lại</button></p>`;
+      } else {
+        seg.status = "done";
+        const lines = /^\(không có lời nói\)$/i.test(txt) ? [] : txt.split(/\n+/).map(x => x.trim()).filter(Boolean);
+        seg.lines = lines;
+        if (seg.el.isConnected) seg.el.innerHTML = lines.length ? lines.map(mtgLineHTML).join("") : `<p class="muted"><i>(${mtgFmt(seg.start)}–${mtgFmt(seg.end)}: không có lời nói)</i></p>`;
+        m.transcript.push(...lines);
+      }
+      m.next++;
+      m.sheet.dispatchEvent(new Event("input"));
+      if (m.recording) mtgStatus("Đang ghi… đã chuyển thành chữ đến " + mtgFmt(seg.end) + ".");
+      if (txt != null) mtgSummarize(m);
+    }
+  } finally { m.busy = false; }
+  if (m.finished && !m.aborted && m.segs.every(sg => sg.status === "done" || sg.status === "failed")) mtgFinish(m);
+}
+async function mtgRetry(idx) {
+  const m = mtgS; if (!m) { toast("Âm thanh của đoạn này đã được bỏ (ghi chú đã đóng), không thử lại được.", "err"); return; }
+  const seg = m.segs[idx]; if (!seg || seg.status !== "failed") return;
+  seg.status = "ready";
+  seg.el.innerHTML = `<p class="mtg-wait">⏳ Đang thử lại đoạn ${mtgFmt(seg.start)}–${mtgFmt(seg.end)}…</p>`;
+  try {
+    const txt = await mtgTranscribe(m, seg);
+    const lines = /^\(không có lời nói\)$/i.test(txt) ? [] : txt.split(/\n+/).map(x => x.trim()).filter(Boolean);
+    seg.status = "done"; seg.lines = lines;
+    seg.el.innerHTML = lines.length ? lines.map(mtgLineHTML).join("") : `<p class="muted"><i>(không có lời nói)</i></p>`;
+    m.transcript = m.segs.filter(sg => sg.lines).flatMap(sg => sg.lines);
+    m.sheet.dispatchEvent(new Event("input"));
+    mtgSummarize(m, !m.recording);
+  } catch (e) {
+    seg.status = "failed";
+    seg.el.innerHTML = `<p class="mtg-err" contenteditable="false">⚠ Vẫn chưa chuyển được (${esc(e.message || "lỗi")}). <button type="button" class="btn sm" data-mtgretry="${seg.idx}">Thử lại</button></p>`;
+  }
+}
+function mdLite(md) {
+  const out = []; let ul = false;
+  const inline = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  String(md || "").split(/\n/).forEach(raw => {
+    const l = raw.trim();
+    if (/^[-*•]\s+/.test(l)) { if (!ul) { out.push("<ul>"); ul = true; } out.push("<li>" + inline(l.replace(/^[-*•]\s+/, "")) + "</li>"); return; }
+    if (ul) { out.push("</ul>"); ul = false; }
+    if (!l) return;
+    if (/^#{1,6}\s+/.test(l)) out.push("<h4>" + inline(l.replace(/^#{1,6}\s+/, "")) + "</h4>");
+    else out.push("<p>" + inline(l) + "</p>");
+  });
+  if (ul) out.push("</ul>");
+  return out.join("");
+}
+async function mtgSummarize(m, final) {
+  if (m.aborted) return;
+  if (m.sumBusy) { m.sumAgain = true; return; }
+  const text = m.transcript.join("\n");
+  if (!text.trim()) return;
+  m.sumBusy = true;
+  try {
+    const prompt = `Dưới đây là bản ghi lời ${final ? "toàn bộ" : "tính đến thời điểm hiện tại của"} một cuộc họp (tiếng Việt). Hãy tóm tắt TRUNG THÀNH theo đúng nội dung đã nói:
+- Không thêm thông tin, không suy diễn, không dùng mẫu biên bản.
+- Sắp xếp theo các vấn đề được bàn theo trình tự cuộc họp; mỗi vấn đề nêu ý chính và ý kiến của từng người nói (nếu có).
+- Nêu rõ kết luận, quyết định, việc cần làm, người phụ trách, thời hạn — CHỈ khi trong cuộc họp có nói.
+- Chỗ có [không rõ] thì không tự điền nội dung.
+Định dạng: tiêu đề mỗi vấn đề bắt đầu bằng "## ", mỗi ý bắt đầu bằng "- ". Viết bằng tiếng Việt, ngắn gọn.
+
+BẢN GHI LỜI:
+${text}`;
+    const r = await (await getMtgModel()).generateContent(prompt);
+    const el = m.block.querySelector(".mtg-summary");
+    if (el && el.isConnected && !m.aborted) {
+      const upto = m.segs[m.next - 1] ? mtgFmt(m.segs[m.next - 1].end) : "";
+      el.innerHTML = mdLite(r.response.text()) + (final ? "" : `<p class="muted"><i>(Tóm tắt tạm tính đến ${upto}; sẽ cập nhật tiếp khi có thêm nội dung.)</i></p>`);
+      m.sheet.dispatchEvent(new Event("input"));
+    }
+  } catch (e) { console.warn("Tóm tắt cuộc họp:", e.message); mtgStatus("Chưa tóm tắt được lần này (" + (e.message || "lỗi") + "); sẽ thử lại ở đoạn sau."); }
+  finally {
+    m.sumBusy = false;
+    if (m.sumAgain) { m.sumAgain = false; mtgSummarize(m, final || (m.finished && m.segs.every(sg => sg.status === "done" || sg.status === "failed"))); }
+  }
+}
+async function mtgFinish(m) {
+  if (m.finalDone) return; m.finalDone = true;
+  await mtgSummarize(m, true);
+  const failed = m.segs.filter(sg => sg.status === "failed").length;
+  mtgStatus("Hoàn tất." + (failed ? " Còn " + failed + " đoạn chưa chuyển được — bấm Thử lại trong bản ghi (trước khi đóng ghi chú)." : "") + " Âm thanh sẽ được bỏ khi đóng ghi chú.");
+  if (currentOpenDocId) saveInFileNote(currentOpenDocId, true);
+  toast("Đã hoàn tất bản ghi lời và tóm tắt cuộc họp.", "ok");
+}
+async function mtgPlay(sec) {
+  const m = mtgS;
+  const seg = m && m.segs.filter(sg => sg.blob && sg.start <= sec + 1).pop();
+  if (!seg) { toast("Âm thanh gốc đã được bỏ sau khi có bản chữ (ghi chú đã đóng), không nghe lại được.", "err"); return; }
+  try {
+    const wav = await toWav16k(seg.blob);
+    if (m.player) { m.player.pause(); URL.revokeObjectURL(m.player.src); }
+    const a = new Audio(URL.createObjectURL(wav)); m.player = a;
+    a.addEventListener("loadedmetadata", () => { a.currentTime = Math.max(0, sec - seg.start - 3); a.play(); }, { once: true });
+    setTimeout(() => a.pause(), 15000);
+    toast("Đang phát lại khoảng " + mtgFmt(Math.max(0, sec - 3)) + " (15 giây).", "ok");
+  } catch (e) { toast("Không phát lại được: " + (e.message || e), "err"); }
+}
+function mtgRename() {
+  const sheet = $("#inFileSheet"); if (!sheet) return;
+  const inp = prompt("Đổi tên người nói trong toàn bộ bản ghi.\nNhập theo dạng:  Người 1 = Nguyễn Văn A\n(đổi nhiều người thì ngăn cách bằng dấu chấm phẩy ; )");
+  if (!inp) return;
+  const pairs = inp.split(";").map(x => x.split("=").map(y => y.trim())).filter(p => p.length === 2 && p[0] && p[1]);
+  if (!pairs.length) { toast("Chưa đúng dạng. Ví dụ: Người 1 = Nguyễn Văn A", "err"); return; }
+  const reOf = from => new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?!\\d)", "g");
+  let n = 0;
+  const walker = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(tn => { let v = tn.nodeValue; pairs.forEach(([a, b]) => { v = v.replace(reOf(a), () => { n++; return b; }); }); if (v !== tn.nodeValue) tn.nodeValue = v; });
+  if (mtgS) { mtgS.transcript = mtgS.transcript.map(l => pairs.reduce((acc, [a, b]) => acc.replace(reOf(a), b), l)); mtgS.segs.forEach(sg => { if (sg.lines) sg.lines = sg.lines.map(l => pairs.reduce((acc, [a, b]) => acc.replace(reOf(a), b), l)); }); }
+  sheet.dispatchEvent(new Event("input"));
+  toast(n ? "Đã đổi " + n + " chỗ." : "Không tìm thấy tên cần đổi.", n ? "ok" : "err");
+}
+
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote],[data-dictate]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote],[data-dictate],[data-mtgpanel],[data-mtgstart],[data-mtgstop],[data-mtgnow],[data-mtgrename],[data-mtgplay],[data-mtgretry]");
   if (!t) return;
+  if (mtgS && mtgS.recording && t.closest("#dlgDoc") && (t.hasAttribute("data-close") || t.dataset.docmode || t.dataset.transferdoc || t.dataset.transferfolder || t.dataset.copyfolder || t.dataset.doc || t.dataset.del || t.dataset.edit || t.dataset.move)) {
+    e.preventDefault();
+    if (!t.hasAttribute("data-close") || !confirm("Đang ghi cuộc họp. Đóng bây giờ sẽ dừng ghi và mất phần chưa chuyển thành chữ. Sếp vẫn muốn đóng?")) { if (!t.hasAttribute("data-close")) toast("Đang ghi cuộc họp — bấm “■ Kết thúc & tóm tắt” trước khi chuyển sang việc khác.", "err"); return; }
+    mtgAbort();
+  }
+  if (t.hasAttribute("data-mtgpanel")) { e.preventDefault(); const pn = $("#mtgPanel"); if (pn) pn.hidden = !pn.hidden && !(mtgS && mtgS.recording) ? true : false; return; }
+  if (t.hasAttribute("data-mtgstart")) { e.preventDefault(); mtgStart(); return; }
+  if (t.hasAttribute("data-mtgstop")) { e.preventDefault(); mtgStop(); return; }
+  if (t.hasAttribute("data-mtgnow")) { e.preventDefault(); mtgRotate(true); return; }
+  if (t.hasAttribute("data-mtgrename")) { e.preventDefault(); mtgRename(); return; }
+  if (t.dataset.mtgplay) { e.preventDefault(); mtgPlay(+t.dataset.mtgplay); return; }
+  if (t.dataset.mtgretry) { e.preventDefault(); mtgRetry(+t.dataset.mtgretry); return; }
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
   else if (t.hasAttribute("data-home")) { e.preventDefault(); go(""); }
@@ -2456,6 +2791,9 @@ document.addEventListener("click", e => {
   else if (t.dataset.fdesc) setFolderDesc(t.dataset.fdesc);
   else if (t.dataset.star) { const f = items[t.dataset.star]; if (f) openDoc(f.id); else { const s = thongDung.find(x => x.id === t.dataset.star); if (s && !canCat(s.cat)) openLogin("Nhập mã tài khoản có quyền xem danh mục “" + (CAT[s.cat] ? CAT[s.cat].name : "") + "”."); else if (s) go("f/" + encodeURIComponent(s.parent)); } }
   else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
+});
+document.addEventListener("input", e => {
+  if (e.target && (e.target.id === "mtgPeople" || e.target.id === "mtgTerms")) mtgSet(e.target.id === "mtgPeople" ? "pnd_mtg_people" : "pnd_mtg_terms", e.target.value);
 });
 document.addEventListener("change", e => {
   if (e.target && e.target.id === "dictPunct") { try { localStorage.setItem("pnd_dict_punct", e.target.checked ? "1" : "0"); } catch (x) {} return; }

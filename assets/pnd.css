@@ -474,3 +474,23 @@ details.more .fld{margin-top:8px}
 .dict-dot{width:9px;height:9px;border-radius:50%;background:#dc2626;animation:dictPulse 1s infinite}
 .dict-pending{color:#64748b;background:#f1f5f9;border-radius:3px}
 @keyframes dictPulse{50%{opacity:.45}}
+
+/* Ghi & tóm tắt cuộc họp */
+.infile-toolbar .mtg-btn{color:#1d4ed8;border-color:#93c5fd}
+.infile-toolbar .mtg-btn.on{background:#1d4ed8;color:#fff;border-color:#1e40af;animation:dictPulse 1.4s infinite}
+.mtg-panel{padding:10px 12px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:grid;gap:8px;font-size:13px}
+.mtg-panel[hidden]{display:none}
+.mtg-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mtg-clock{font-variant-numeric:tabular-nums;font-weight:700;color:#b91c1c}
+.mtg-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mtg-grid label{display:grid;gap:3px;font-weight:600}
+.mtg-grid textarea{width:100%;font:inherit;font-weight:400;border:1px solid #cbd5e1;border-radius:6px;padding:6px;resize:vertical}
+.mtg-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mtg-live{background:#fff;border:1px dashed #93c5fd;border-radius:6px;padding:6px 8px;color:#475569;font-style:italic;max-height:3.4em;overflow:hidden}
+.mtg-live[hidden]{display:none}
+.mtg-block{border-left:3px solid #93c5fd;padding-left:10px;margin:10px 0}
+.mtg-wait{color:#64748b;font-style:italic}
+.mtg-err{color:#b91c1c}
+.mtg-ts{color:#64748b;font-size:.85em;font-variant-numeric:tabular-nums}
+.mtg-unclear{background:#fef3c7;color:#92400e;border-radius:3px;padding:0 3px;cursor:pointer;white-space:nowrap}
+@media (max-width:640px){.mtg-grid{grid-template-columns:1fr}}
