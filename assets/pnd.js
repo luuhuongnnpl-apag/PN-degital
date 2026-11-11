@@ -2369,8 +2369,7 @@ async function dictDrain(d) {
   while (d.queue.length) {
     const job = d.queue.shift();
     let out;
-    if (myGrant()) { try { out = await punctuate(job.raw, d.ctx); } catch (e) { console.warn("Thêm dấu câu:", e.message); out = basicPunct(job.raw, d.ctx); } }
-    else out = basicPunct(job.raw, d.ctx);
+    try { out = await punctuate(job.raw, d.ctx); } catch (e) { console.warn("Thêm dấu câu:", e.message); out = basicPunct(job.raw, d.ctx); }
     d.ctx = (d.ctx + " " + out).slice(-600);
     if (job.sp.isConnected) {
       // Chèn chữ đã có dấu TRƯỚC thẻ tạm rồi gỡ thẻ tạm → giữ đúng thứ tự nói
@@ -2414,7 +2413,6 @@ async function summarizeNote(btn) {
   if (!sel || !sel.rangeCount || sel.isCollapsed || !sheet.contains(sel.getRangeAt(0).commonAncestorContainer)) { toast("Sếp bôi đen đoạn cần tóm tắt trong văn bản rồi bấm “✨ Tóm tắt”.", "err"); return; }
   const src = sel.toString().trim();
   if (src.split(/\s+/).length < 15) { toast("Đoạn bôi đen còn quá ngắn để tóm tắt.", "err"); return; }
-  if (!myGrant()) { openLogin("Đăng nhập để dùng tóm tắt bằng Gemini."); return; }
   const range = sel.getRangeAt(0).cloneRange();
   // Điểm chèn: sau khối (đoạn văn) chứa cuối phần bôi đen
   let endNode = range.endContainer; if (endNode.nodeType === 3) endNode = endNode.parentNode;
