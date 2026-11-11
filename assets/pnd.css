@@ -463,3 +463,14 @@ details.more .fld{margin-top:8px}
 .attached-note-item{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 0;border-top:1px dashed #fde68a}
 .attached-note-item:first-of-type{border-top:0}
 @media (max-width:700px){.infile-transfer-grid{grid-template-columns:1fr}.infile-sheet{padding:18px 16px}}
+
+/* Đọc chính tả */
+.infile-toolbar .dict-btn{color:#b91c1c;border-color:#fca5a5}
+.infile-toolbar .dict-btn.on{background:#dc2626;color:#fff;border-color:#b91c1c;animation:dictPulse 1.4s infinite}
+.infile-toolbar .dict-opt{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer}
+.dict-live{display:flex;align-items:center;gap:6px;padding:6px 12px;background:#fef2f2;border-bottom:1px solid #fecaca;font-size:13px;color:#7f1d1d}
+.dict-live[hidden]{display:none}
+.dict-live #dictInterim{font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.dict-dot{width:9px;height:9px;border-radius:50%;background:#dc2626;animation:dictPulse 1s infinite}
+.dict-pending{color:#64748b;background:#f1f5f9;border-radius:3px}
+@keyframes dictPulse{50%{opacity:.45}}

@@ -766,7 +766,11 @@ function inFileEditorHTML(f, hasOriginalView) {
       <button type="button" data-edins="check" title="Chèn mục kiểm tra">☑ Mục chọn</button>
       <button type="button" data-edins="date" title="Chèn ngày giờ">📅 Ngày</button>
       <button type="button" data-edcmd="removeFormat" title="Xóa định dạng">⌫</button>
+      <span class="sep"></span>
+      <button type="button" class="dict-btn" data-dictate title="Bấm để bắt đầu nói, chữ hiện vào văn bản tại vị trí con trỏ. Bấm lần nữa để dừng.">🎤 Đọc chính tả</button>
+      <label class="dict-opt" title="Gemini tự thêm dấu câu, viết hoa cho từng câu vừa đọc"><input type="checkbox" id="dictPunct"${dictPunctOn() ? " checked" : ""}> Tự thêm dấu câu</label>
     </div>
+    <div class="dict-live" id="dictLive" hidden><span class="dict-dot"></span><b>Đang nghe…</b> <span id="dictInterim" class="muted">Mời sếp nói. Bấm “⏹ Dừng ghi” khi xong.</span></div>
     <div class="infile-canvas">
       <div id="inFileSheet" class="infile-sheet" contenteditable="true" spellcheck="true">${htmlContent}</div>
     </div>
@@ -812,7 +816,7 @@ async function saveInFileNote(id, silent) {
   const f = items[id]; if (!f) return false;
   const sheet = $("#inFileSheet"), titleInp = $("#inFileTitleInput"), st = $("#inFileSaveStatus");
   if (!sheet) return false;
-  const html = sheet.innerHTML;
+  const html = cleanDictHTML(sheet);
   const newName = (titleInp && titleInp.value.trim()) || f.name;
   const plain = stripHtmlText(html).slice(0, 260);
   const now = new Date().toISOString();
@@ -946,7 +950,7 @@ async function transferNoteToSpecificFolder(sourceId, isCopy) {
 function exportNoteFile(id, kind) {
   const f = items[id]; if (!f) return;
   const sheet = $("#inFileSheet");
-  const htmlBody = sheet ? sheet.innerHTML : (f.noteContent || `<p>${esc(f.note || "")}</p>`);
+  const htmlBody = sheet ? cleanDictHTML(sheet) : (f.noteContent || `<p>${esc(f.note || "")}</p>`);
   const safeName = (f.name || "van-ban-ghi-chu").replace(/[\\/:*?"<>|]+/g, "_");
   if (kind === "txt") {
     const txt = (f.name || "") + "\n" + "=".repeat(40) + "\n\n" + stripHtmlText(htmlBody);
@@ -1077,7 +1081,7 @@ function openDoc(id, forceMode) {
   $("#docActs").innerHTML = acts.join("");
   if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
 }
-$("#dlgDoc").addEventListener("close", () => { if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
+$("#dlgDoc").addEventListener("close", () => { stopDictation(); if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
 
 /* ---------- Tìm kiếm ---------- */
 let searchCache = { q: null, hits: null };
@@ -2196,7 +2200,156 @@ async function setFolderDesc(id) {
 
 
 /* ---------- Hỏi AI (Gemini qua Firebase AI Logic) ---------- */
-let aiChat = null;
+let aiChat = null, aiInst = null;
+async function getAIInst() {
+  if (aiInst) return aiInst;
+  if (!CFG.APPCHECK_SITE_KEY) throw new Error("Trợ lý AI đang chờ kích hoạt (cần hoàn tất đăng ký Gemini và App Check).");
+  const [{ initializeAppCheck, ReCaptchaEnterpriseProvider }, aiMod] = await Promise.all([
+    import("https://www.gstatic.com/firebasejs/12.0.0/firebase-app-check.js"),
+    import("https://www.gstatic.com/firebasejs/12.0.0/firebase-ai.js")
+  ]);
+  try { initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(CFG.APPCHECK_SITE_KEY), isTokenAutoRefreshEnabled: true }); } catch (e) {}
+  aiInst = { mod: aiMod, ai: aiMod.getAI(app, { backend: new aiMod.GoogleAIBackend() }) };
+  return aiInst;
+}
+
+/* ---------- Đọc chính tả (giọng nói → chữ) trong khung soạn thảo ghi chú ---------- */
+// Chỉ dừng khi người dùng bấm nút; trình duyệt tự ngắt (im lặng, mạng) thì tự nối lại.
+let dict = null, punctModel = null;
+function dictPunctOn() { try { return localStorage.getItem("pnd_dict_punct") !== "0"; } catch (e) { return true; } }
+function cleanDictHTML(sheet) {
+  const c = sheet.cloneNode(true);
+  c.querySelectorAll(".dict-pending").forEach(sp => sp.replaceWith(document.createTextNode(sp.textContent)));
+  return c.innerHTML;
+}
+function dictSetUI(on) {
+  const b = document.querySelector("[data-dictate]"), live = $("#dictLive");
+  if (b) { b.classList.toggle("on", on); b.textContent = on ? "⏹ Dừng ghi" : "🎤 Đọc chính tả"; }
+  if (live) live.hidden = !on;
+  if (on && $("#dictInterim")) $("#dictInterim").textContent = "Mời sếp nói. Bấm “⏹ Dừng ghi” khi xong.";
+}
+function dictCaretRange(sheet) {
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && sheet.contains(sel.getRangeAt(0).startContainer)) { const r = sel.getRangeAt(0).cloneRange(); r.collapse(false); return r; }
+  const r = document.createRange(); r.selectNodeContents(sheet);
+  const last = sheet.lastElementChild;
+  if (last && /^(P|DIV|H\d|BLOCKQUOTE|LI)$/.test(last.tagName)) r.selectNodeContents(last);
+  r.collapse(false); return r;
+}
+function toggleDictation() { if (dict) stopDictation(); else startDictation(); }
+function startDictation() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const sheet = $("#inFileSheet");
+  if (!sheet) return;
+  if (!SR) { toast("Trình duyệt này chưa hỗ trợ đọc chính tả. Sếp dùng Chrome hoặc Edge; trên iPhone/iPad dùng nút micro của bàn phím.", "err"); return; }
+  const rec = new SR();
+  rec.lang = "vi-VN"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  dict = { rec, sheet, range: dictCaretRange(sheet), queue: [], busy: false, ctx: stripHtmlText(sheet.innerHTML).slice(-300), fails: 0 };
+  rec.onresult = ev => {
+    if (!dict || dict.rec !== rec) return;
+    let interim = "";
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i], txt = (r[0] && r[0].transcript || "").trim();
+      if (!txt) continue;
+      if (r.isFinal) dictInsert(txt); else interim += txt + " ";
+    }
+    if ($("#dictInterim")) $("#dictInterim").textContent = interim.trim() || "…";
+  };
+  rec.onerror = ev => {
+    if (ev.error === "not-allowed" || ev.error === "service-not-allowed") { toast("Chưa được dùng micro. Sếp bấm biểu tượng ổ khóa cạnh địa chỉ web → cho phép Micro, rồi bấm lại 🎤.", "err"); stopDictation(); }
+    else if (ev.error === "audio-capture") { toast("Không tìm thấy micro trên máy.", "err"); stopDictation(); }
+  };
+  rec.onend = () => {
+    if (!dict || dict.rec !== rec) return;
+    // Trình duyệt tự ngắt khi im lặng / mất mạng: nối lại ngay, chỉ dừng khi sếp bấm nút
+    setTimeout(() => { if (dict && dict.rec === rec) { try { rec.start(); dict.fails = 0; } catch (e) { if (++dict.fails > 5) { toast("Mất kết nối nhận dạng giọng nói, đã dừng ghi.", "err"); stopDictation(); } } } }, 250);
+  };
+  try { rec.start(); } catch (e) { dict = null; toast("Không bật được micro: " + (e.message || e), "err"); return; }
+  dictSetUI(true);
+  const keep = dict.range.cloneRange();
+  sheet.focus();
+  const sel = window.getSelection();
+  if (sel) { sel.removeAllRanges(); sel.addRange(keep); }
+  dict.range = keep.cloneRange();
+}
+function stopDictation() {
+  if (!dict) return;
+  const d = dict; dict = null;
+  try { d.rec.onend = null; d.rec.stop(); } catch (e) {}
+  dictSetUI(false);
+  if (d.queue.length || d.busy) toast("Đang hoàn tất thêm dấu câu cho phần vừa đọc…", "ok");
+  dictDrain(d);
+}
+// Theo con trỏ: sếp bấm sang chỗ khác trong văn bản thì chữ đọc tiếp sẽ vào chỗ đó
+document.addEventListener("selectionchange", () => {
+  if (!dict) return;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && dict.sheet.contains(sel.getRangeAt(0).startContainer)) { const r = sel.getRangeAt(0).cloneRange(); r.collapse(false); dict.range = r; }
+});
+function dictInsert(raw) {
+  const d = dict; if (!d || !d.sheet.isConnected) return;
+  const r = d.range;
+  let prev = "";
+  try { const pr = document.createRange(); pr.setStart(d.sheet, 0); pr.setEnd(r.startContainer, r.startOffset); prev = pr.toString(); } catch (e) {}
+  const lead = prev && !/\s$/.test(prev) ? " " : "";
+  const sp = document.createElement("span");
+  sp.className = "dict-pending"; sp.textContent = lead + raw;
+  r.insertNode(sp);
+  r.setStartAfter(sp); r.collapse(true);
+  const sel = window.getSelection();
+  if (document.activeElement === d.sheet && sel) { sel.removeAllRanges(); sel.addRange(r.cloneRange()); }
+  d.sheet.dispatchEvent(new Event("input"));
+  d.queue.push({ sp, raw, lead });
+  dictDrain(d);
+}
+function basicPunct(raw, ctx) {
+  let t = raw.trim(); if (!t) return t;
+  if (!ctx.trim() || /[.!?…:]\s*$/.test(ctx)) t = t.charAt(0).toLocaleUpperCase("vi") + t.slice(1);
+  if (!/[.!?…,;:]$/.test(t)) t += ".";
+  return t;
+}
+async function getPunctModel() {
+  if (punctModel) return punctModel;
+  const { mod, ai } = await getAIInst();
+  punctModel = mod.getGenerativeModel(ai, {
+    model: CFG.AI_MODEL || "gemini-2.5-flash",
+    systemInstruction: "Bạn là bộ chuẩn hóa văn bản đọc chính tả tiếng Việt. Nhiệm vụ duy nhất: thêm dấu câu (chấm, phẩy, hỏi, chấm than, hai chấm, ngoặc kép) và viết hoa đúng chính tả tiếng Việt (đầu câu, tên riêng, tên cơ quan, tên văn bản pháp luật như Bộ luật Dân sự, Luật Đất đai, Nghị định, Thông tư). Giữ nguyên từng từ, thứ tự từ; không thêm, bớt, diễn đạt lại hay giải thích. Viết số hiệu văn bản theo dạng chuẩn nếu người nói đọc rõ (ví dụ: Điều 3, khoản 2, Nghị định 101/2024/NĐ-CP). Chỉ trả về đúng đoạn mới đã chuẩn hóa, không kèm ngoặc hay ghi chú.",
+    generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
+  });
+  return punctModel;
+}
+async function punctuate(raw, ctx) {
+  const m = await getPunctModel();
+  const prompt = (ctx.trim() ? "Đoạn văn ngay trước (chỉ để tham khảo ngữ cảnh, KHÔNG lặp lại):\n«" + ctx.slice(-300) + "»\n\n" : "") + "Đoạn mới cần thêm dấu câu và viết hoa:\n«" + raw + "»";
+  const r = await m.generateContent(prompt);
+  let out = (r.response.text() || "").trim().replace(/^[«"“]+|[»"”]+$/g, "").trim();
+  // An toàn: nếu kết quả lệch quá nhiều so với lời nói (AI tự viết thêm), giữ bản thô
+  const norm = x => x.toLocaleLowerCase("vi").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const a = norm(raw).split(" "), b = norm(out).split(" ");
+  if (!out || b.length > a.length * 1.5 + 3 || b.length < a.length * 0.6) return basicPunct(raw, ctx);
+  return out;
+}
+async function dictDrain(d) {
+  if (d.busy) return;
+  d.busy = true;
+  while (d.queue.length) {
+    const job = d.queue.shift();
+    let out = job.raw;
+    if (dictPunctOnNow()) {
+      if (myGrant()) { try { out = await punctuate(job.raw, d.ctx); } catch (e) { console.warn("Thêm dấu câu:", e.message); out = basicPunct(job.raw, d.ctx); } }
+      else out = basicPunct(job.raw, d.ctx);
+    }
+    d.ctx = (d.ctx + " " + out).slice(-600);
+    if (job.sp.isConnected) {
+      const tn = document.createTextNode(job.lead + out);
+      job.sp.replaceWith(tn);
+      d.sheet.dispatchEvent(new Event("input"));
+    }
+  }
+  d.busy = false;
+}
+function dictPunctOnNow() { const c = $("#dictPunct"); return c ? c.checked : dictPunctOn(); }
+
 function aiAdd(cls, text) { const p = document.createElement("div"); p.className = "ai-msg " + cls; p.textContent = text; $("#aiLog").appendChild(p); $("#aiLog").scrollTop = 1e9; return p; }
 function contextText() {
   const lines = Object.values(items).filter(f => canSee(f)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
@@ -2204,14 +2357,8 @@ function contextText() {
 }
 async function getChat() {
   if (aiChat) return aiChat;
-  if (!CFG.APPCHECK_SITE_KEY) throw new Error("Trợ lý AI đang chờ kích hoạt (cần hoàn tất đăng ký Gemini và App Check).");
-  const [{ initializeAppCheck, ReCaptchaEnterpriseProvider }, { getAI, getGenerativeModel, GoogleAIBackend }] = await Promise.all([
-    import("https://www.gstatic.com/firebasejs/12.0.0/firebase-app-check.js"),
-    import("https://www.gstatic.com/firebasejs/12.0.0/firebase-ai.js")
-  ]);
-  try { initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(CFG.APPCHECK_SITE_KEY), isTokenAutoRefreshEnabled: true }); } catch (e) {}
-  const ai = getAI(app, { backend: new GoogleAIBackend() });
-  const model = getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
+  const { mod, ai } = await getAIInst();
+  const model = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
   aiChat = model.startChat({ history: [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }] });
   return aiChat;
 }
@@ -2233,7 +2380,7 @@ async function askAI(e) {
 
 /* ---------- Sự kiện ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote]");
+  const t = e.target.closest("[data-cat],[data-folder],[data-home],[data-back],[data-go],[data-login],[data-adminlogin],[data-edit],[data-move],[data-del],[data-movefolder],[data-upload],[data-fnew],[data-fren],[data-fdel],[data-fimg],[data-flevel],[data-fdesc],[data-star],[data-doc],[data-view],[data-freset],[data-close],[data-image-close],[data-newnote],[data-togglenote],[data-quicknote],[data-docmode],[data-notesave],[data-edcmd],[data-edins],[data-transferdoc],[data-transferfolder],[data-copyfolder],[data-exportdoc],[data-exporttxt],[data-printnote],[data-dictate]");
   if (!t) return;
   if (t.dataset.cat) { e.preventDefault(); go("dm/" + t.dataset.cat); }
   else if (t.dataset.folder) { e.preventDefault(); go("f/" + encodeURIComponent(t.dataset.folder)); }
@@ -2273,6 +2420,7 @@ document.addEventListener("click", e => {
     }
   }
   else if (t.dataset.notesave) { e.preventDefault(); saveInFileNote(t.dataset.notesave, false); }
+  else if (t.hasAttribute("data-dictate")) { e.preventDefault(); toggleDictation(); }
   else if (t.dataset.edcmd) {
     e.preventDefault();
     const sheet = $("#inFileSheet");
@@ -2310,6 +2458,7 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-close") || t.hasAttribute("data-image-close")) t.closest("dialog").close();
 });
 document.addEventListener("change", e => {
+  if (e.target && e.target.id === "dictPunct") { try { localStorage.setItem("pnd_dict_punct", e.target.checked ? "1" : "0"); } catch (x) {} return; }
   const b = e.target.closest && e.target.closest("[data-edblock],[data-edsize]");
   if (!b) return;
   const sheet = $("#inFileSheet");
