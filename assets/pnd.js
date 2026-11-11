@@ -2212,6 +2212,33 @@ async function getAIInst() {
   return aiInst;
 }
 
+function aiAdd(cls, text) { const p = document.createElement("div"); p.className = "ai-msg " + cls; p.textContent = text; $("#aiLog").appendChild(p); $("#aiLog").scrollTop = 1e9; return p; }
+function contextText() {
+  const lines = Object.values(items).filter(f => canSee(f)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
+  return lines.length ? lines.join("\n") : "(chưa có tài liệu nào trong phạm vi người dùng được xem)";
+}
+async function getChat() {
+  if (aiChat) return aiChat;
+  const { mod, ai } = await getAIInst();
+  const model = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
+  aiChat = model.startChat({ history: [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }] });
+  return aiChat;
+}
+function openAI() {
+  if (!$("#aiLog").children.length) aiAdd("bot", "Xin chào! Bạn muốn tìm tài liệu hay hỏi điều gì?");
+  $("#dlgAI").showModal(); setTimeout(() => $("#aiInput").focus(), 50);
+}
+async function askAI(e) {
+  e.preventDefault(); const q = $("#aiInput").value.trim(); if (!q) return;
+  $("#aiInput").value = ""; aiAdd("me", q); const bot = aiAdd("bot", "…");
+  try {
+    const chat = await getChat();
+    const r = await chat.sendMessageStream(q); let txt = "";
+    for await (const ch of r.stream) { txt += ch.text(); bot.textContent = txt; $("#aiLog").scrollTop = 1e9; }
+    if (!txt) bot.textContent = "(Không có câu trả lời.)";
+  } catch (x) { bot.textContent = "Chưa hỏi được: " + (x.message || x); aiChat = null; }
+}
+
 /* ---------- Ghi âm → chữ trực tiếp trong văn bản ghi chú ---------- */
 // Bấm 🎤 Ghi âm: nói đến đâu chữ hiện vào văn bản đến đó (chữ xám = đang nghe). Chỉ dừng khi bấm ⏹ Dừng.
 // Độ nhạy: micro được tự cân mức, lọc ồn và khuếch đại trước khi nhận dạng (trình duyệt hỗ trợ); Gemini thêm dấu câu cho từng câu.
