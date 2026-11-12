@@ -298,7 +298,7 @@ async function loadItems() {
     if (n && n._deleted) { delete items[id]; continue; }
     if (!items[id]) items[id] = { ...n, parent: tree[n.parent] ? n.parent : ghiChuRoot };
     else if (n.noteContent && (!items[id].noteContent || String(n.modified || "") > String(items[id].modified || ""))) {
-      items[id] = { ...items[id], noteContent: n.noteContent, note: n.note || items[id].note, isNote: items[id].isNote || n.isNote, attachedNotes: n.attachedNotes || items[id].attachedNotes };
+      items[id] = { ...items[id], noteContent: n.noteContent, note: n.note || items[id].note, isNote: items[id].isNote || n.isNote, attachedNotes: n.attachedNotes || items[id].attachedNotes, noteTabs: n.noteTabs || items[id].noteTabs, notePage: n.notePage || items[id].notePage };
     }
   }
   loaded.items = true;
@@ -718,104 +718,475 @@ function allDocOptions(excludeId) {
     }).join("");
 }
 
+/* ---------- Trình soạn thảo kiểu Word: trang giấy, ribbon, nhiều mục (tab) trong một file ---------- */
+// Một file ghi chú có thể chia thành nhiều MỤC (như tab của Google Docs). Dữ liệu: f.noteTabs = [{id, title, html}],
+// f.notePage = {size, orient, margin}. f.noteContent luôn giữ bản gộp (để tìm kiếm, tóm tắt, tương thích dữ liệu cũ).
+const PAGE_SIZES = { A4: [210, 297, "A4 (21 × 29,7 cm)"], A5: [148, 210, "A5 (14,8 × 21 cm)"], Letter: [215.9, 279.4, "Letter (21,6 × 27,9 cm)"] };
+const MARGINS = {
+  nd30: { t: 20, b: 20, l: 30, r: 15, name: "Văn bản hành chính (trên 2 · dưới 2 · trái 3 · phải 1,5 cm)" },
+  normal: { t: 25.4, b: 25.4, l: 25.4, r: 25.4, name: "Thường (2,54 cm mỗi lề)" },
+  moderate: { t: 25.4, b: 25.4, l: 19.1, r: 19.1, name: "Vừa (trên/dưới 2,54 · trái/phải 1,91 cm)" },
+  narrow: { t: 12.7, b: 12.7, l: 12.7, r: 12.7, name: "Hẹp (1,27 cm mỗi lề)" }
+};
+const W_FONTS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Tahoma", "Verdana", "Georgia", "Courier New"];
+const W_SIZES = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 36, 48, 72];
+const MM = 96 / 25.4;
+// Kiểu chữ dùng chung cho trang soạn thảo và file xuất (để file Word ra giống hệt màn hình)
+const WORD_CSS = `body{font-family:"Times New Roman",serif;font-size:14pt;line-height:1.5;color:#000}
+h1,h2,h3,td,th,li{font-family:"Times New Roman",serif}
+p{margin:0 0 6pt}h1{font-size:16pt;font-weight:bold;margin:12pt 0 6pt}h2{font-size:14pt;font-weight:bold;margin:12pt 0 6pt}h3{font-size:14pt;font-weight:bold;font-style:italic;margin:10pt 0 4pt}
+blockquote{margin:6pt 0 6pt 1cm;padding-left:8pt;border-left:2pt solid #999;font-style:italic}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #000;padding:3pt 6pt;vertical-align:top}th{font-weight:bold}
+ul,ol{margin:0 0 6pt}.note-summary{border-left:3pt solid #7c3aed;padding:4pt 8pt;background:#f5f3ff}`;
+let ed = null; // trạng thái trình soạn thảo đang mở
+
+function notePageOf(f) {
+  const p = { size: "A4", orient: "portrait", margin: "nd30", ...((f && f.notePage) || {}) };
+  if (!PAGE_SIZES[p.size]) p.size = "A4";
+  if (!MARGINS[p.margin]) p.margin = "nd30";
+  if (p.orient !== "landscape") p.orient = "portrait";
+  return p;
+}
+function pageDims(p) { let [w, h] = PAGE_SIZES[p.size]; if (p.orient === "landscape") [w, h] = [h, w]; return { w, h, m: MARGINS[p.margin] }; }
+function noteTabsOf(f) {
+  if (Array.isArray(f.noteTabs) && f.noteTabs.length) return f.noteTabs.map((t, i) => ({ id: t.id || "t-" + rid(), title: t.title || ("Mục " + (i + 1)), html: t.html || "" }));
+  const html = f.noteContent || `<h2 style="margin-top:0">${esc(f.name)}</h2><p>${esc(f.note || "Nhập nội dung văn bản / ghi chú trực tiếp tại đây…")}</p>`;
+  return [{ id: "t-" + rid(), title: "Mục 1", html }];
+}
+function joinTabs(tabs) {
+  if (tabs.length === 1) return tabs[0].html;
+  return tabs.map(t => `<h1 class="tab-head">${esc(t.title)}</h1>${t.html}`).join('<div class="pg-break"></div>');
+}
+const wSheet = () => $("#inFileSheet");
+const wOpts = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? " selected" : ""}>${esc(l)}</option>`).join("");
+
 function inFileEditorHTML(f, hasOriginalView) {
-  const htmlContent = f.noteContent || `<h2 style="margin-top:0">${esc(f.name)}</h2><p>${esc(f.note || "Nhập nội dung văn bản / ghi chú trực tiếp tại đây…")}</p>`;
-  return `<div class="infile-wrap" id="inFileWrap">
+  ed = { id: f.id, tabs: noteTabsOf(f), active: 0, page: notePageOf(f), zoom: 1, range: null, ro: null };
+  const p = ed.page;
+  return `<div class="infile-wrap word${window.innerWidth < 820 ? " no-tabs" : ""}" id="inFileWrap">
     <div class="infile-mode-bar">
       <div class="infile-mode-tabs">
         ${hasOriginalView ? `<button type="button" class="infile-tab" data-docmode="view">👁 Xem tài liệu gốc</button>` : ""}
-        <button type="button" class="infile-tab on" data-docmode="edit">✎ Soạn thảo trực tiếp trong file</button>
+        <button type="button" class="infile-tab on" data-docmode="edit">✎ Soạn thảo</button>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input id="inFileTitleInput" class="w-title" type="text" value="${esc(f.name)}" placeholder="Tên file văn bản…" aria-label="Tên file văn bản">
+      <div style="display:flex;align-items:center;gap:8px">
         <span id="inFileSaveStatus" style="font-size:12px;color:#fde68a">Sẵn sàng soạn thảo</span>
-        <button type="button" class="btn green sm" data-notesave="${esc(f.id)}" style="background:#16a34a;border-color:#15803d;color:#fff;padding:5px 12px">💾 Lưu văn bản (Ctrl+S)</button>
+        <button type="button" class="btn green sm" data-notesave="${esc(f.id)}" style="background:#16a34a;border-color:#15803d;color:#fff;padding:5px 12px">💾 Lưu (Ctrl+S)</button>
       </div>
     </div>
-    <div class="infile-title-bar">
-      <span style="font-size:12.5px;font-weight:700;color:var(--muted)">TÊN FILE VĂN BẢN:</span>
-      <input id="inFileTitleInput" type="text" value="${esc(f.name)}" placeholder="Nhập tên file văn bản…">
+    <div class="rb-tabs" role="tablist">
+      <button type="button" class="rb-pane" data-wpane title="Ẩn / hiện danh sách mục trong file">☰ Mục</button>
+      <button type="button" data-wrtab="file">Tệp</button>
+      <button type="button" class="on" data-wrtab="home">Trang chủ</button>
+      <button type="button" data-wrtab="insert">Chèn</button>
+      <button type="button" data-wrtab="layout">Bố cục</button>
     </div>
-    <div class="infile-toolbar" role="toolbar" aria-label="Thanh công cụ soạn thảo">
-      <select data-edblock aria-label="Kiểu đoạn">
-        <option value="P">Đoạn văn</option>
-        <option value="H1">Tiêu đề lớn (H1)</option>
-        <option value="H2">Tiêu đề mục (H2)</option>
-        <option value="H3">Tiêu đề con (H3)</option>
-        <option value="BLOCKQUOTE">Trích dẫn</option>
-      </select>
-      <select data-edsize aria-label="Cỡ chữ">
-        <option value="3">Cỡ thường</option>
-        <option value="4">Cỡ vừa</option>
-        <option value="5">Cỡ lớn</option>
-        <option value="6">Rất lớn</option>
-      </select>
-      <span class="sep"></span>
-      <button type="button" data-edcmd="bold" title="In đậm (Ctrl+B)"><b>B</b></button>
-      <button type="button" data-edcmd="italic" title="In nghiêng (Ctrl+I)"><i>I</i></button>
-      <button type="button" data-edcmd="underline" title="Gạch chân (Ctrl+U)"><u>U</u></button>
-      <button type="button" data-edcmd="strikeThrough" title="Gạch ngang"><s>S</s></button>
-      <span class="sep"></span>
-      <button type="button" data-edcmd="justifyLeft" title="Căn trái">≣ Trái</button>
-      <button type="button" data-edcmd="justifyCenter" title="Căn giữa"> Center</button>
-      <button type="button" data-edcmd="justifyRight" title="Căn phải">Phải</button>
-      <button type="button" data-edcmd="justifyFull" title="Căn đều 2 bên">Đều</button>
-      <span class="sep"></span>
-      <button type="button" data-edcmd="insertUnorderedList" title="Danh sách chấm">• DS</button>
-      <button type="button" data-edcmd="insertOrderedList" title="Danh sách số">1. DS</button>
-      <button type="button" data-edins="table" title="Chèn bảng">⊞ Bảng</button>
-      <button type="button" data-edins="check" title="Chèn mục kiểm tra">☑ Mục chọn</button>
-      <button type="button" data-edins="date" title="Chèn ngày giờ">📅 Ngày</button>
-      <button type="button" data-edcmd="removeFormat" title="Xóa định dạng">⌫</button>
-      <span class="sep"></span>
-      <button type="button" class="dict-btn" data-dictate title="Bấm để ghi âm, nói đến đâu chữ hiện vào văn bản đến đó (tại vị trí con trỏ). Bấm lần nữa để dừng.">🎤 Ghi âm</button>
-      <button type="button" class="sum-btn" data-notesum title="Bôi đen đoạn cần tóm tắt rồi bấm nút này">✨ Tóm tắt</button>
+    <div class="ribbon">
+      <div class="rb-panel infile-toolbar" data-rpanel="file" hidden>
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-notesave="${esc(f.id)}">💾 Lưu</button>
+          <button type="button" data-exportdoc="${esc(f.id)}" title="Xuất toàn bộ file, mỗi mục sang trang mới">📘 Xuất Word – cả file</button>
+          <button type="button" data-wexporttab="${esc(f.id)}" title="Chỉ xuất mục đang mở">📘 Xuất Word – mục đang mở</button>
+          <button type="button" data-exporttxt="${esc(f.id)}">📄 Xuất .txt</button>
+          <button type="button" data-printnote="${esc(f.id)}">🖨 In / Lưu PDF</button>
+        </div><span class="rb-lbl">Lưu &amp; xuất file</span></div>
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-wtransfer>⇄ Chuyển vào file / thư mục</button>
+          <button type="button" data-winfo>ⓘ Thông tin tài liệu</button>
+        </div><span class="rb-lbl">Sắp xếp</span></div>
+      </div>
+      <div class="rb-panel infile-toolbar" data-rpanel="home">
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-wcmd="undo" title="Hoàn tác (Ctrl+Z)">↶</button>
+          <button type="button" data-wcmd="redo" title="Làm lại (Ctrl+Y)">↷</button>
+        </div><span class="rb-lbl">Hoàn tác</span></div>
+        <div class="rb-grp"><div class="rb-row">
+          <select data-wfont aria-label="Phông chữ" style="width:150px">${wOpts(W_FONTS.map(x => [x, x]), "Times New Roman")}</select>
+          <select data-wsize aria-label="Cỡ chữ" style="width:62px">${wOpts(W_SIZES.map(x => [x, x]), 14)}</select>
+        </div><div class="rb-row">
+          <button type="button" data-wcmd="bold" title="In đậm (Ctrl+B)"><b>B</b></button>
+          <button type="button" data-wcmd="italic" title="In nghiêng (Ctrl+I)"><i>I</i></button>
+          <button type="button" data-wcmd="underline" title="Gạch chân (Ctrl+U)"><u>U</u></button>
+          <button type="button" data-wcmd="strikeThrough" title="Gạch ngang"><s>S</s></button>
+          <button type="button" data-wcmd="superscript" title="Chỉ số trên">x²</button>
+          <button type="button" data-wcmd="subscript" title="Chỉ số dưới">x₂</button>
+          <label class="w-color" title="Màu chữ"><span style="border-bottom:3px solid #c00000">A</span><input type="color" data-wcolor value="#c00000"></label>
+          <label class="w-color" title="Tô nền chữ"><span style="background:#fff200;padding:0 3px">ab</span><input type="color" data-whilite value="#fff200"></label>
+          <button type="button" data-wcmd="removeFormat" title="Xóa định dạng">⌫</button>
+        </div><span class="rb-lbl">Phông chữ</span></div>
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-wcmd="insertUnorderedList" title="Danh sách gạch đầu dòng">• ≡</button>
+          <button type="button" data-wcmd="insertOrderedList" title="Danh sách đánh số">1. ≡</button>
+          <button type="button" data-wcmd="outdent" title="Giảm thụt lề">⇤</button>
+          <button type="button" data-wcmd="indent" title="Tăng thụt lề">⇥</button>
+          <button type="button" data-wfirst title="Thụt đầu dòng 1 cm cho đoạn đang chọn (bấm lần nữa để bỏ)">↦ Đầu dòng</button>
+        </div><div class="rb-row">
+          <button type="button" data-wcmd="justifyLeft" title="Căn trái (Ctrl+L)">⯇ Trái</button>
+          <button type="button" data-wcmd="justifyCenter" title="Căn giữa (Ctrl+E)">Giữa</button>
+          <button type="button" data-wcmd="justifyRight" title="Căn phải (Ctrl+R)">Phải ⯈</button>
+          <button type="button" data-wcmd="justifyFull" title="Căn đều hai bên (Ctrl+J)">Đều</button>
+          <select data-wline aria-label="Giãn dòng" title="Giãn dòng">${wOpts([["", "Giãn dòng"], ["1", "1,0"], ["1.15", "1,15"], ["1.3", "1,3"], ["1.5", "1,5"], ["2", "2,0"]], "")}</select>
+          <select data-wspace aria-label="Khoảng cách sau đoạn" title="Khoảng cách sau đoạn">${wOpts([["", "Cách đoạn"], ["0", "0 pt"], ["6", "6 pt"], ["12", "12 pt"]], "")}</select>
+        </div><span class="rb-lbl">Đoạn văn</span></div>
+        <div class="rb-grp"><div class="rb-row">
+          <select data-wblock aria-label="Kiểu đoạn" style="width:128px">${wOpts([["P", "Bình thường"], ["H1", "Tiêu đề 1"], ["H2", "Tiêu đề 2"], ["H3", "Tiêu đề 3"], ["BLOCKQUOTE", "Trích dẫn"]], "P")}</select>
+        </div><span class="rb-lbl">Kiểu</span></div>
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" class="dict-btn" data-dictate title="Bấm để ghi âm, nói đến đâu chữ hiện vào văn bản đến đó (tại vị trí con trỏ). Bấm lần nữa để dừng.">🎤 Ghi âm</button>
+          <button type="button" class="sum-btn" data-notesum title="Bôi đen đoạn cần tóm tắt rồi bấm nút này">✨ Tóm tắt</button>
+        </div><span class="rb-lbl">Giọng nói &amp; AI</span></div>
+      </div>
+      <div class="rb-panel infile-toolbar" data-rpanel="insert" hidden>
+        <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-wins="table">⊞ Bảng</button>
+          <button type="button" data-wins="pagebreak" title="Phần sau bắt đầu ở trang mới (Ctrl+Enter)">⤓ Ngắt trang</button>
+          <button type="button" data-wins="hr">― Đường kẻ</button>
+          <button type="button" data-wins="link">🔗 Liên kết</button>
+          <button type="button" data-wins="date">📅 Ngày</button>
+          <button type="button" data-wins="check">☐ Mục chọn</button>
+        </div><span class="rb-lbl">Chèn</span></div>
+      </div>
+      <div class="rb-panel infile-toolbar" data-rpanel="layout" hidden>
+        <div class="rb-grp"><div class="rb-row">
+          <select data-wpsize aria-label="Khổ giấy">${wOpts(Object.entries(PAGE_SIZES).map(([k, v]) => [k, v[2]]), p.size)}</select>
+          <select data-wporient aria-label="Hướng giấy">${wOpts([["portrait", "Giấy dọc"], ["landscape", "Giấy ngang"]], p.orient)}</select>
+          <select data-wpmargin aria-label="Lề trang" style="width:300px">${wOpts(Object.entries(MARGINS).map(([k, v]) => [k, "Lề: " + v.name]), p.margin)}</select>
+        </div><span class="rb-lbl">Thiết lập trang (áp dụng cả khi xuất Word / in)</span></div>
+      </div>
     </div>
-    <div class="infile-canvas">
-      <div id="inFileSheet" class="infile-sheet" contenteditable="true" spellcheck="true">${htmlContent}</div>
-    </div>
-    <div class="infile-transfer">
+    <div class="infile-transfer" id="wTransfer" hidden>
       <div class="infile-transfer-grid">
         <div class="infile-transfer-card">
           <h5>📌 1. Lưu &amp; Chuyển vào một File (Tài liệu) cụ thể</h5>
-          <div class="infile-transfer-row">
-            <select id="inFileTargetDoc">${allDocOptions(f.id)}</select>
-          </div>
+          <div class="infile-transfer-row"><select id="inFileTargetDoc">${allDocOptions(f.id)}</select></div>
           <div class="infile-transfer-row">
             <select id="inFileTransferDocMode" style="flex:1">
               <option value="attach">Đính kèm &amp; gắn vào file đích (kèm chuyển cùng thư mục)</option>
-              <option value="merge">Gộp / nối nội dung văn bản vào nội dung file đích</option>
+              <option value="merge">Gộp vào file đích (thêm thành mục mới trong file đích)</option>
             </select>
             <button type="button" class="btn primary sm" data-transferdoc="${esc(f.id)}">⇄ Chuyển vào File này</button>
           </div>
         </div>
         <div class="infile-transfer-card">
           <h5>📁 2. Lưu &amp; Chuyển sang Thư mục / Danh mục cụ thể</h5>
-          <div class="infile-transfer-row">
-            <select id="inFileTargetFolder">${allFolderOptions()}</select>
-          </div>
+          <div class="infile-transfer-row"><select id="inFileTargetFolder">${allFolderOptions()}</select></div>
           <div class="infile-transfer-row">
             <button type="button" class="btn primary sm" data-transferfolder="${esc(f.id)}">⇄ Chuyển sang thư mục</button>
             <button type="button" class="btn sm" data-copyfolder="${esc(f.id)}">📋 Sao chép thêm vào thư mục</button>
           </div>
         </div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px dashed var(--line)">
-        <span class="muted">Xuất thành file cụ thể về máy tính:</span>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button type="button" class="btn sm" data-exportdoc="${esc(f.id)}">📘 Xuất file Word (.doc)</button>
-          <button type="button" class="btn sm" data-exporttxt="${esc(f.id)}">📄 Xuất file Text (.txt)</button>
-          <button type="button" class="btn sm" data-printnote="${esc(f.id)}">🖨 In / Lưu PDF</button>
+    </div>
+    <div class="w-body">
+      <aside class="w-tabs" aria-label="Các mục trong file">
+        <div class="w-tabs-head"><b>MỤC TRONG FILE</b><button type="button" data-wtabadd title="Thêm mục mới">＋ Thêm</button></div>
+        <div id="wTabList"></div>
+        <p class="w-tabs-hint">Mỗi mục là một bài / một phần riêng, như tab của Google Docs. Bấm đúp tên mục để đổi tên. Khi xuất Word cả file, mỗi mục sang trang mới.</p>
+      </aside>
+      <div class="infile-canvas" id="wCanvas">
+        <div class="w-pagewrap" id="wPageWrap">
+          <div id="inFileSheet" class="infile-sheet w-page" contenteditable="true" spellcheck="true">${ed.tabs[0].html}</div>
         </div>
       </div>
     </div>
+    <div class="w-status">
+      <span id="wStPage">Trang 1</span><span id="wStWords"></span><span id="wStTab"></span><span class="grow"></span>
+      <button type="button" data-wzoom="-" title="Thu nhỏ">−</button><span id="wZoomLbl">100%</span><button type="button" data-wzoom="+" title="Phóng to">+</button>
+      <button type="button" data-wzoom="fit" title="Vừa chiều ngang khung">Vừa khung</button><button type="button" data-wzoom="1">100%</button>
+    </div>
   </div>`;
 }
+
+function wRenderTabs() {
+  if (!ed) return;
+  const box = $("#wTabList"); if (!box) return;
+  const n = ed.tabs.length;
+  box.innerHTML = ed.tabs.map((t, i) => `<div class="w-tab${i === ed.active ? " on" : ""}" data-wtabgo="${i}" title="${esc(t.title)}">
+    <span class="w-tab-nm" data-wtabname="${i}">${esc(t.title)}</span>
+    <span class="w-tab-tools">
+      <button type="button" data-wtabren="${i}" title="Đổi tên mục">✎</button>
+      ${i > 0 ? `<button type="button" data-wtabup="${i}" title="Đưa lên">↑</button>` : ""}
+      ${i < n - 1 ? `<button type="button" data-wtabdown="${i}" title="Đưa xuống">↓</button>` : ""}
+      ${n > 1 ? `<button type="button" data-wtabdel="${i}" title="Xóa mục">🗑</button>` : ""}
+    </span></div>`).join("");
+  const st = $("#wStTab"); if (st) st.textContent = n > 1 ? "Mục " + (ed.active + 1) + "/" + n + ": " + ed.tabs[ed.active].title : "";
+}
+function wCommit() { const s = wSheet(); if (ed && s) ed.tabs[ed.active].html = cleanDictHTML(s); }
+function wChanged() { const s = wSheet(); if (s) s.dispatchEvent(new Event("input")); }
+function wGoTab(i) {
+  if (!ed || i === ed.active || !ed.tabs[i]) return;
+  if (dict) stopDictation();
+  wCommit();
+  ed.active = i; ed.range = null;
+  const s = wSheet(); s.innerHTML = ed.tabs[i].html || "<p><br></p>";
+  wRenderTabs(); wLayout();
+  $("#wCanvas").scrollTop = 0;
+  s.focus();
+}
+async function wAddTab() {
+  if (!ed) return;
+  const name = await ask("Tên mục mới (VD: Bài 2, Chương II, Phụ lục…):", { title: "THÊM MỤC MỚI TRONG FILE", input: "Tên mục", value: "Mục " + (ed.tabs.length + 1), ok: "Thêm mục" });
+  if (name == null) return;
+  wCommit();
+  const title = name || ("Mục " + (ed.tabs.length + 1));
+  ed.tabs.splice(ed.active + 1, 0, { id: "t-" + rid(), title, html: `<h2 style="margin-top:0">${esc(title)}</h2><p><br></p>` });
+  const to = ed.active + 1;
+  ed.active = to; const s = wSheet(); s.innerHTML = ed.tabs[to].html;
+  wRenderTabs(); wLayout(); wChanged(); s.focus();
+}
+async function wRenameTab(i) {
+  if (!ed || !ed.tabs[i]) return;
+  const name = await ask("Đổi tên mục:", { title: "ĐỔI TÊN MỤC", input: "Tên mục", value: ed.tabs[i].title, ok: "Đổi tên" });
+  if (!name) return;
+  ed.tabs[i].title = name; wRenderTabs(); wChanged();
+}
+async function wDelTab(i) {
+  if (!ed || ed.tabs.length < 2 || !ed.tabs[i]) return;
+  if (!await ask("Xóa mục “" + ed.tabs[i].title + "” cùng toàn bộ nội dung của mục này?", { title: "XÓA MỤC", ok: "Xóa mục" })) return;
+  if (dict) stopDictation();
+  wCommit();
+  ed.tabs.splice(i, 1);
+  ed.active = Math.min(i === ed.active ? i : (i < ed.active ? ed.active - 1 : ed.active), ed.tabs.length - 1);
+  wSheet().innerHTML = ed.tabs[ed.active].html || "<p><br></p>";
+  wRenderTabs(); wLayout(); wChanged();
+}
+function wMoveTab(i, d) {
+  const j = i + d; if (!ed || !ed.tabs[i] || !ed.tabs[j]) return;
+  wCommit();
+  [ed.tabs[i], ed.tabs[j]] = [ed.tabs[j], ed.tabs[i]];
+  if (ed.active === i) ed.active = j; else if (ed.active === j) ed.active = i;
+  wRenderTabs(); wChanged();
+}
+
+// Trang giấy: kích thước, lề, ngắt trang, phóng to/thu nhỏ, đếm trang/từ
+function wApplyPage() {
+  const s = wSheet(); if (!ed || !s) return;
+  const { w, h, m } = pageDims(ed.page);
+  s.style.width = w + "mm"; s.style.minHeight = h + "mm";
+  s.style.padding = `${m.t}mm ${m.r}mm ${m.b}mm ${m.l}mm`;
+  s.style.setProperty("--ph", h + "mm");
+  wLayout();
+}
+function wLayout() {
+  const s = wSheet(), wrap = $("#wPageWrap"); if (!ed || !s || !wrap) return;
+  const { w, h, m } = pageDims(ed.page), ph = h * MM;
+  // Ngắt trang: khoảng trống kéo dài tới đầu trang sau (như Word)
+  s.querySelectorAll(".pg-break").forEach(b => {
+    b.setAttribute("contenteditable", "false");
+    b.style.height = "0px";
+    const top = b.offsetTop;
+    const next = Math.ceil((top + 1) / ph) * ph + m.t * MM;
+    b.style.height = Math.max(24, next - top) + "px";
+  });
+  const z = ed.zoom;
+  s.style.transform = z === 1 ? "" : `scale(${z})`;
+  wrap.style.width = (w * MM * z) + "px";
+  wrap.style.height = (s.offsetHeight * z) + "px";
+  const pages = Math.max(1, Math.ceil((s.offsetHeight - 2) / ph));
+  const zl = $("#wZoomLbl"); if (zl) zl.textContent = Math.round(z * 100) + "%";
+  const pg = $("#wStPage"); if (pg) pg.textContent = "Khoảng " + pages + " trang";
+  const words = t => (stripHtmlText(t).match(/\S+/g) || []).length;
+  const cur = words(s.innerHTML);
+  const total = ed.tabs.reduce((a, t, i) => a + (i === ed.active ? cur : words(t.html)), 0);
+  const ws = $("#wStWords"); if (ws) ws.textContent = cur.toLocaleString("vi-VN") + " từ" + (ed.tabs.length > 1 ? " (cả file " + total.toLocaleString("vi-VN") + " từ)" : "");
+}
+function wZoom(v) {
+  if (!ed) return;
+  const cv = $("#wCanvas"), { w } = pageDims(ed.page);
+  if (v === "fit") ed.zoom = cv ? Math.max(0.4, Math.min(1.5, (cv.clientWidth - 36) / (w * MM))) : 1;
+  else if (v === "+") ed.zoom = Math.min(2, Math.round((ed.zoom + 0.1) * 10) / 10);
+  else if (v === "-") ed.zoom = Math.max(0.4, Math.round((ed.zoom - 0.1) * 10) / 10);
+  else ed.zoom = +v || 1;
+  wLayout();
+}
+function initWordEditor() {
+  const s = wSheet(); if (!ed || !s) return;
+  wRenderTabs(); wApplyPage();
+  const cv = $("#wCanvas"), { w } = pageDims(ed.page);
+  if (cv && cv.clientWidth - 36 < w * MM) wZoom("fit");
+  if (ed.ro) ed.ro.disconnect();
+  let raf = 0;
+  ed.ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(wLayout); });
+  ed.ro.observe(s);
+  s.addEventListener("input", () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(wLayout); });
+  s.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); wInsert("pagebreak"); }
+  });
+}
+
+// Lệnh định dạng
+function wRestore() {
+  const s = wSheet(); if (!s) return null;
+  const sel = window.getSelection();
+  // Con trỏ đang ở trong trang thì dùng luôn; chỉ khôi phục vùng chọn đã nhớ khi tiêu điểm đã rời khỏi trang (ô chọn phông, hộp nhập…)
+  const inside = sel && sel.rangeCount && s.contains(sel.getRangeAt(0).startContainer);
+  s.focus();
+  if (!inside && ed && ed.range && s.contains(ed.range.startContainer)) { sel.removeAllRanges(); sel.addRange(ed.range); }
+  return sel;
+}
+function wWrapCollapsed(style) {
+  // Con trỏ chưa bôi đen: tạo vùng chữ mới với định dạng đã chọn để gõ tiếp
+  const sel = window.getSelection(); if (!sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  const sp = document.createElement("span"); Object.assign(sp.style, style); sp.textContent = "​";
+  r.insertNode(sp);
+  const nr = document.createRange(); nr.setStart(sp.firstChild, 1); nr.collapse(true);
+  sel.removeAllRanges(); sel.addRange(nr);
+}
+function wFontSize(pt) {
+  const s = wSheet(), sel = wRestore(); if (!s || !sel || !sel.rangeCount) return;
+  if (sel.isCollapsed) { wWrapCollapsed({ fontSize: pt + "pt" }); wChanged(); return; }
+  document.execCommand("styleWithCSS", false, false);
+  document.execCommand("fontSize", false, "7");
+  const made = [];
+  s.querySelectorAll('font[size="7"]').forEach(fn => {
+    const sp = document.createElement("span"); sp.style.fontSize = pt + "pt"; made.push(sp);
+    if (fn.face) sp.style.fontFamily = fn.face; if (fn.color) sp.style.color = fn.color;
+    while (fn.firstChild) sp.appendChild(fn.firstChild);
+    sp.querySelectorAll("[style]").forEach(x => { x.style.fontSize = ""; });
+    fn.replaceWith(sp);
+  });
+  s.querySelectorAll('span[style*="xxx-large"]').forEach(x => { x.style.fontSize = pt + "pt"; });
+  if (made.length) { // giữ nguyên vùng bôi đen như Word để định dạng tiếp
+    const r = document.createRange(); r.setStartBefore(made[0]); r.setEndAfter(made[made.length - 1]);
+    sel.removeAllRanges(); sel.addRange(r); ed.range = r.cloneRange();
+  }
+  wChanged();
+}
+function wFontName(name) {
+  const sel = wRestore(); if (!sel || !sel.rangeCount) return;
+  if (sel.isCollapsed) { wWrapCollapsed({ fontFamily: `"${name}"` }); wChanged(); return; }
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand("fontName", false, name);
+  wChanged();
+}
+function wColor(kind, val) {
+  const sel = wRestore(); if (!sel) return;
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand(kind === "hilite" ? "hiliteColor" : "foreColor", false, val);
+  wChanged();
+}
+function wBlocks() {
+  const s = wSheet(), sel = window.getSelection(); if (!s || !sel.rangeCount) return [];
+  const B = "p,h1,h2,h3,h4,h5,h6,li,blockquote,div:not(.pg-break):not(.note-summary)";
+  const r = sel.getRangeAt(0);
+  let list = [...s.querySelectorAll(B)].filter(b => r.intersectsNode(b) && !b.querySelector(B));
+  if (!list.length) {
+    let n = r.startContainer; if (n.nodeType === 3) n = n.parentNode;
+    const b = n.closest && n.closest(B);
+    if (b && b !== s && s.contains(b)) list = [b];
+    else { document.execCommand("formatBlock", false, "P"); n = sel.getRangeAt(0).startContainer; if (n.nodeType === 3) n = n.parentNode; const b2 = n.closest && n.closest("p"); if (b2 && s.contains(b2)) list = [b2]; }
+  }
+  return list;
+}
+function wParaStyle(prop, val) {
+  const sel = wRestore(); if (!sel) return;
+  const bl = wBlocks(); if (!bl.length) return;
+  if (prop === "textIndent") { const on = !bl[0].style.textIndent; bl.forEach(b => { b.style.textIndent = on ? "1cm" : ""; }); }
+  else bl.forEach(b => { b.style[prop] = val; });
+  wChanged();
+}
+async function wInsert(k) {
+  const s = wSheet(); if (!s) return;
+  if (k === "table") {
+    const v = await ask("Số hàng × số cột (VD: 3x4):", { title: "CHÈN BẢNG", input: "Hàng x Cột", value: "3x3", ok: "Chèn bảng" });
+    if (!v) return;
+    const m = v.match(/(\d+)\D+(\d+)/) || [0, 3, 3];
+    const rows = Math.min(50, Math.max(1, +m[1])), cols = Math.min(12, Math.max(1, +m[2]));
+    const cell = tag => "<" + tag + ">&nbsp;</" + tag + ">";
+    const html = `<table><tbody><tr>${cell("th").repeat(cols)}</tr>${("<tr>" + cell("td").repeat(cols) + "</tr>").repeat(Math.max(0, rows - 1))}</tbody></table><p><br></p>`;
+    wRestore(); document.execCommand("insertHTML", false, html);
+  } else if (k === "link") {
+    const url = await ask("Địa chỉ liên kết (https://…):", { title: "CHÈN LIÊN KẾT", input: "Địa chỉ", value: "https://", ok: "Chèn" });
+    if (!url || url === "https://") return;
+    const sel = wRestore();
+    if (sel && sel.isCollapsed) document.execCommand("insertHTML", false, `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>&nbsp;`);
+    else document.execCommand("createLink", false, url);
+  } else {
+    wRestore();
+    if (k === "pagebreak") document.execCommand("insertHTML", false, `<div class="pg-break" contenteditable="false"></div><p><br></p>`);
+    else if (k === "hr") document.execCommand("insertHorizontalRule", false, null);
+    else if (k === "date") document.execCommand("insertHTML", false, `<span><i>(Ngày ${fmtDate(todayISO())})</i> </span>`);
+    else if (k === "check") document.execCommand("insertHTML", false, `<p>☐ Nội dung cần kiểm tra / thực hiện…</p>`);
+  }
+  wChanged();
+}
+// Cập nhật ô phông/cỡ chữ theo vị trí con trỏ, nhớ vùng chọn để dùng lại khi bấm ribbon
+document.addEventListener("selectionchange", () => {
+  const s = wSheet(); if (!ed || !s) return;
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !s.contains(sel.getRangeAt(0).startContainer)) return;
+  ed.range = sel.getRangeAt(0).cloneRange();
+  let n = sel.anchorNode; if (n && n.nodeType === 3) n = n.parentNode;
+  if (!n || !n.nodeType) return;
+  const cs = getComputedStyle(n);
+  const fam = (cs.fontFamily.split(",")[0] || "").replace(/["']/g, "").trim();
+  const fs = $("[data-wfont]"); if (fs && W_FONTS.includes(fam)) fs.value = fam;
+  const pt = Math.round(parseFloat(cs.fontSize) * 0.75 * 2) / 2;
+  const zs = $("[data-wsize]"); if (zs) { if (![...zs.options].some(o => +o.value === pt)) { zs.querySelectorAll("option.tmp").forEach(o => o.remove()); const o = new Option(String(pt), String(pt)); o.className = "tmp"; zs.add(o); } zs.value = String(pt); }
+  const bk = n.closest && n.closest("h1,h2,h3,blockquote,p");
+  const bs = $("[data-wblock]"); if (bs) bs.value = bk && s.contains(bk) ? bk.tagName : "P";
+});
+// Nút ribbon không lấy mất vùng chọn trong trang
+document.addEventListener("mousedown", e => {
+  if (e.target.closest && e.target.closest(".ribbon button, .w-status button")) e.preventDefault();
+});
+document.addEventListener("click", e => {
+  const t = e.target.closest && e.target.closest("[data-wcmd],[data-wins],[data-wrtab],[data-wpane],[data-wtabgo],[data-wtabadd],[data-wtabren],[data-wtabup],[data-wtabdown],[data-wtabdel],[data-wzoom],[data-wtransfer],[data-winfo],[data-wexporttab],[data-wfirst]");
+  if (!t || !ed) return;
+  e.preventDefault();
+  const d = t.dataset;
+  if (d.wcmd) { const sel = wRestore(); if (sel) { document.execCommand("styleWithCSS", false, false); document.execCommand(d.wcmd, false, null); wChanged(); } }
+  else if (d.wins) wInsert(d.wins);
+  else if (t.hasAttribute("data-wfirst")) wParaStyle("textIndent");
+  else if (d.wrtab) {
+    document.querySelectorAll("[data-wrtab]").forEach(b => b.classList.toggle("on", b === t));
+    document.querySelectorAll("[data-rpanel]").forEach(p => { p.hidden = p.dataset.rpanel !== d.wrtab; });
+  }
+  else if (t.hasAttribute("data-wpane")) { const w = $("#inFileWrap"); if (w) { w.classList.toggle("no-tabs"); requestAnimationFrame(wLayout); } }
+  else if (d.wtabren) wRenameTab(+d.wtabren);
+  else if (d.wtabup) wMoveTab(+d.wtabup, -1);
+  else if (d.wtabdown) wMoveTab(+d.wtabdown, 1);
+  else if (d.wtabdel) wDelTab(+d.wtabdel);
+  else if (t.hasAttribute("data-wtabadd")) wAddTab();
+  else if (d.wtabgo != null) wGoTab(+d.wtabgo);
+  else if (d.wzoom) wZoom(d.wzoom);
+  else if (t.hasAttribute("data-wtransfer")) { const p = $("#wTransfer"); if (p) p.hidden = !p.hidden; }
+  else if (t.hasAttribute("data-winfo")) $("#dlgDoc").classList.toggle("show-info");
+  else if (d.wexporttab) exportNoteFile(d.wexporttab, "doc", "tab");
+});
+document.addEventListener("dblclick", e => {
+  const t = e.target.closest && e.target.closest("[data-wtabname]");
+  if (t && ed) { e.preventDefault(); wRenameTab(+t.dataset.wtabname); }
+});
+document.addEventListener("change", e => {
+  const t = e.target; if (!ed || !t.closest || !t.closest("#inFileWrap")) return;
+  const d = t.dataset;
+  if ("wfont" in d) wFontName(t.value);
+  else if ("wsize" in d) wFontSize(+t.value);
+  else if ("wcolor" in d) wColor("fore", t.value);
+  else if ("whilite" in d) wColor("hilite", t.value);
+  else if ("wblock" in d) { wRestore(); document.execCommand("formatBlock", false, t.value); wChanged(); }
+  else if ("wline" in d) { if (t.value) wParaStyle("lineHeight", t.value); t.value = ""; }
+  else if ("wspace" in d) { if (t.value !== "") wParaStyle("marginBottom", t.value + "pt"); t.value = ""; }
+  else if ("wpsize" in d || "wporient" in d || "wpmargin" in d) {
+    ed.page = { size: $("[data-wpsize]").value, orient: $("[data-wporient]").value, margin: $("[data-wpmargin]").value };
+    wApplyPage(); wChanged();
+  }
+});
 
 async function saveInFileNote(id, silent) {
   const f = items[id]; if (!f) return false;
   const sheet = $("#inFileSheet"), titleInp = $("#inFileTitleInput"), st = $("#inFileSaveStatus");
   if (!sheet) return false;
-  const html = cleanDictHTML(sheet);
+  let html = cleanDictHTML(sheet);
+  if (ed && ed.id === id) {
+    ed.tabs[ed.active].html = html;
+    f.noteTabs = ed.tabs.map(t => ({ id: t.id, title: t.title, html: t.html }));
+    f.notePage = { ...ed.page };
+    html = joinTabs(f.noteTabs);
+  }
   const newName = (titleInp && titleInp.value.trim()) || f.name;
   const plain = stripHtmlText(html).slice(0, 260);
   const now = new Date().toISOString();
@@ -834,7 +1205,7 @@ async function saveInFileNote(id, silent) {
   if (canUp()) {
     try {
       if (st) st.textContent = "Đang lưu lên đám mây…";
-      await setDoc(doc(db, "pnd_items", f.id), {
+      const payload = {
         id: f.id,
         name: f.name,
         noteContent: f.noteContent,
@@ -847,7 +1218,10 @@ async function saveInFileNote(id, silent) {
         cat: f.cat,
         parent: f.parent,
         access: levelOf(f)
-      }, { merge: true });
+      };
+      if (f.noteTabs) payload.noteTabs = f.noteTabs;
+      if (f.notePage) payload.notePage = f.notePage;
+      await setDoc(doc(db, "pnd_items", f.id), payload, { merge: true });
       scheduleCatalogSync();
     } catch (e) { console.warn("Lưu nội dung file:", e.message); }
   }
@@ -872,11 +1246,16 @@ async function transferNoteToSpecificDoc(sourceId) {
   target.attachedNotes = attached;
 
   if (mode === "merge") {
-    const existingHtml = target.noteContent || (target.note ? `<p>${esc(target.note)}</p>` : "");
-    target.noteContent = existingHtml + `<hr><section><h3>📎 ${esc(src.name)} (${fmtDate(todayISO())})</h3>${src.noteContent || ""}</section>`;
+    // Gộp = thêm (các) mục của văn bản nguồn thành mục mới trong file đích
+    const base = Array.isArray(target.noteTabs) && target.noteTabs.length ? target.noteTabs.slice()
+      : (target.noteContent || target.note) ? [{ id: "t-" + rid(), title: "Mục 1", html: target.noteContent || `<p>${esc(target.note)}</p>` }] : [];
+    const sTabs = noteTabsOf(src);
+    sTabs.forEach(t => base.push({ id: "t-" + rid(), title: sTabs.length === 1 ? src.name : src.name + " – " + t.title, html: t.html }));
+    target.noteTabs = base;
+    target.noteContent = joinTabs(base);
     target.note = ((target.note ? target.note + " | " : "") + "Gộp từ: " + src.name).slice(0, 300);
   } else {
-    if (!target.noteContent) target.noteContent = src.noteContent || "";
+    if (!target.noteContent) { target.noteContent = src.noteContent || ""; if (Array.isArray(src.noteTabs) && !target.noteTabs) { target.noteTabs = src.noteTabs.map(t => ({ ...t })); if (src.notePage) target.notePage = { ...src.notePage }; } }
     if (target.parent && tree[target.parent]) {
       src.parent = target.parent;
       src.cat = target.cat || tree[target.parent].cat;
@@ -889,7 +1268,10 @@ async function transferNoteToSpecificDoc(sourceId) {
   putLocalNote(target);
   if (canUp()) {
     try {
-      await setDoc(doc(db, "pnd_items", target.id), { attachedNotes: target.attachedNotes, noteContent: target.noteContent || "", note: target.note || "", modified: now }, { merge: true });
+      const tp = { attachedNotes: target.attachedNotes, noteContent: target.noteContent || "", note: target.note || "", modified: now };
+      if (target.noteTabs) tp.noteTabs = target.noteTabs;
+      if (target.notePage) tp.notePage = target.notePage;
+      await setDoc(doc(db, "pnd_items", target.id), tp, { merge: true });
       await setDoc(doc(db, "pnd_items", src.id), { parent: src.parent, cat: src.cat, linkedDocId: target.id, linkedDocName: target.name, modified: now }, { merge: true });
       scheduleCatalogSync();
     } catch (e) { console.warn("Chuyển vào file đích:", e.message); }
@@ -946,38 +1328,40 @@ async function transferNoteToSpecificFolder(sourceId, isCopy) {
   openDoc(src.id, currentDocMode);
 }
 
-function exportNoteFile(id, kind) {
+function exportNoteFile(id, kind, scope) {
   const f = items[id]; if (!f) return;
-  const sheet = $("#inFileSheet");
-  const htmlBody = sheet ? cleanDictHTML(sheet) : (f.noteContent || `<p>${esc(f.note || "")}</p>`);
-  const safeName = (f.name || "van-ban-ghi-chu").replace(/[\\/:*?"<>|]+/g, "_");
+  const live = ed && ed.id === id && wSheet();
+  if (live) wCommit();
+  const tabs = live ? ed.tabs : noteTabsOf(f);
+  const page = live ? ed.page : notePageOf(f);
+  const cur = live ? ed.active : 0;
+  const list = scope === "tab" ? [tabs[cur]] : tabs;
+  const many = list.length > 1;
+  const baseName = (f.name || "van-ban-ghi-chu") + (scope === "tab" && tabs.length > 1 ? " - " + tabs[cur].title : "");
+  const safeName = baseName.replace(/[\\/:*?"<>|]+/g, "_");
+  const download = (blob, file) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+  const clean = html => { const d = document.createElement("div"); d.innerHTML = html || ""; d.querySelectorAll(".dict-interim").forEach(x => x.remove()); d.querySelectorAll("[contenteditable]").forEach(x => x.removeAttribute("contenteditable")); d.querySelectorAll(".pg-break").forEach(x => x.removeAttribute("style")); d.innerHTML = d.innerHTML.replace(/​/g, ""); return d.innerHTML; };
   if (kind === "txt") {
-    const txt = (f.name || "") + "\n" + "=".repeat(40) + "\n\n" + stripHtmlText(htmlBody);
-    const blob = new Blob(["\uFEFF" + txt], { type: "text/plain;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = safeName + ".txt";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    const txt = list.map(t => (many ? t.title.toUpperCase() + "\n" + "-".repeat(30) + "\n" : "") + stripHtmlText(clean(t.html))).join("\n\n");
+    download(new Blob(["﻿" + (f.name || "") + "\n" + "=".repeat(40) + "\n\n" + txt], { type: "text/plain;charset=utf-8" }), safeName + ".txt");
     toast("Đã tải về tệp " + safeName + ".txt", "ok");
     return;
   }
+  const { w, h, m } = pageDims(page);
   if (kind === "doc") {
-    const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc(f.name)}</title><style>body{font-family:'Times New Roman',serif;font-size:14pt;line-height:1.5}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px}</style></head><body>${htmlBody}</body></html>`;
-    const blob = new Blob(["\uFEFF" + docHtml], { type: "application/msword;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = safeName + ".doc";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    const BR = `<br clear=all style='mso-special-character:line-break;page-break-before:always'>`;
+    const body = list.map(t => (many ? `<h1>${esc(t.title)}</h1>` : "") + clean(t.html).replace(/<div class="pg-break"><\/div>/g, BR)).join(BR);
+    const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc(baseName)}</title><!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]--><style>@page WordSection1{size:${w}mm ${h}mm;margin:${m.t}mm ${m.r}mm ${m.b}mm ${m.l}mm;mso-page-orientation:${page.orient}}div.WordSection1{page:WordSection1}${WORD_CSS}</style></head><body><div class="WordSection1">${body}</div></body></html>`;
+    download(new Blob(["﻿" + docHtml], { type: "application/msword;charset=utf-8" }), safeName + ".doc");
     toast("Đã xuất file Word: " + safeName + ".doc", "ok");
     return;
   }
   if (kind === "print") {
-    const w = window.open("", "_blank", "width=850,height=700");
-    if (!w) { toast("Hãy cho phép mở cửa sổ bật lên để in / lưu PDF.", "err"); return; }
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(f.name)}</title><style>body{font:14pt/1.6 "Times New Roman",serif;margin:25mm 20mm;color:#000}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:6px}</style></head><body>${htmlBody}<script>window.onload=()=>{setTimeout(()=>{window.print();},250);}<\/script></body></html>`);
-    w.document.close();
+    const body = list.map((t, i) => `<section${i ? ' style="page-break-before:always"' : ""}>${many ? `<h1>${esc(t.title)}</h1>` : ""}${clean(t.html)}</section>`).join("");
+    const wnd = window.open("", "_blank", "width=900,height=720");
+    if (!wnd) { toast("Hãy cho phép mở cửa sổ bật lên để in / lưu PDF.", "err"); return; }
+    wnd.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(baseName)}</title><style>@page{size:${w}mm ${h}mm;margin:${m.t}mm ${m.r}mm ${m.b}mm ${m.l}mm}body{margin:0}${WORD_CSS}.pg-break{page-break-after:always;height:0;border:0}</style></head><body>${body}<script>window.onload=()=>{setTimeout(()=>{window.print();},250);}<\/script></body></html>`);
+    wnd.document.close();
   }
 }
 
@@ -1033,11 +1417,16 @@ function openDoc(id, forceMode) {
   const isNoteFile = !!(f.isNote || k === "note" || (!did && f.noteContent));
   const hasOriginalView = !!(did || (f.link && /^https?:\/\//.test(f.link)));
   currentDocMode = forceMode || (isNoteFile ? "edit" : "view");
+  if (currentDocMode !== "edit" && ed && ed.ro) ed.ro.disconnect();
+  if (currentDocMode !== "edit") ed = null;
+  $("#dlgDoc").classList.toggle("word-on", !f.locked && (currentDocMode === "edit" || (!did && !(f.link && /^https?:\/\//.test(f.link)))));
+  $("#dlgDoc").classList.remove("show-info");
   $("#docTitle").textContent = (f.star ? "★ " : "") + f.name;
   if (f.locked) {
     $("#docPreview").innerHTML = `<div class="pv-card"><div style="font-size:34px">🔒</div><h4>Bạn chưa được mở tài liệu này</h4><p class="muted">${esc(lockReason(f))}</p>${myGrant() ? "" : '<button type="button" class="btn primary" data-login>Đăng nhập</button>'}</div>`;
   } else if (currentDocMode === "edit") {
     $("#docPreview").innerHTML = inFileEditorHTML(f, hasOriginalView);
+    requestAnimationFrame(initWordEditor);
     const tf = $("#inFileTargetFolder");
     if (tf && f.parent && tree[f.parent]) tf.value = f.parent;
     const sheet = $("#inFileSheet");
@@ -1063,6 +1452,7 @@ function openDoc(id, forceMode) {
       : f.link && /^https?:\/\//.test(f.link)
         ? `${modeHeader}<div class="pv-card"><h4>Liên kết web</h4><p class="muted">Trang này mở trong thẻ mới của trình duyệt.</p><p style="overflow-wrap:anywhere;font-size:13px">${esc(f.link)}</p><a class="btn primary" style="display:inline-block;text-decoration:none" href="${esc(f.link)}" target="_blank" rel="noopener">Mở liên kết</a></div>`
         : inFileEditorHTML(f, false);
+    if (ed && ed.id === f.id) requestAnimationFrame(initWordEditor);
   }
   const rows = [["Định dạng", FMT[k][0] + (f.size ? " · " + fmtSize(f.size) : "")], ["Số / ký hiệu", f.number], ["Ban hành bởi", f.issuer], ["Ngày ban hành", f.issued && fmtDate(f.issued)], ["Hiệu lực từ", f.effective && fmtDate(f.effective)], ["Tình trạng", f.status], ["Mức truy cập", LV[levelOf(f)].name], ["Thư mục", pathOf(f.parent).map(p => p.name).join(" › ")], ["Gắn với file", f.linkedDocName], ["Cập nhật", f.modified && fmtDate(String(f.modified).slice(0, 10))], ["Ghi chú", f.note]].filter(r => r[1]);
   const attachedHTML = Array.isArray(f.attachedNotes) && f.attachedNotes.length
@@ -1080,7 +1470,7 @@ function openDoc(id, forceMode) {
   $("#docActs").innerHTML = acts.join("");
   if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
 }
-$("#dlgDoc").addEventListener("close", () => { stopDictation(); if (currentOpenDocId && currentDocMode === "edit" && $("#inFileSheet")) saveInFileNote(currentOpenDocId, true); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
+$("#dlgDoc").addEventListener("close", async () => { stopDictation(); if (currentOpenDocId && $("#inFileSheet")) await saveInFileNote(currentOpenDocId, true); if (ed && ed.ro) ed.ro.disconnect(); ed = null; $("#dlgDoc").classList.remove("word-on", "show-info"); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
 
 /* ---------- Tìm kiếm ---------- */
 let searchCache = { q: null, hits: null };
@@ -1400,7 +1790,7 @@ async function publicList(id) {
   } while (page);
   return out;
 }
-const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added", "access", "coverUrl", "coverFileId", "isNote", "noteContent", "attachedNotes", "linkedDocId", "linkedDocName", "fmime"];
+const META = ["issuer", "number", "issued", "effective", "status", "note", "star", "added", "access", "coverUrl", "coverFileId", "isNote", "noteContent", "noteTabs", "notePage", "attachedNotes", "linkedDocId", "linkedDocName", "fmime"];
 const TREE_KEEP = ["order", "imageUrl", "imageFileId", "access", "desc"];
 async function loadLive() {
   if (!settings || !CFG.DRIVE_KEY || !canUp()) return false;
@@ -2265,6 +2655,7 @@ function cleanDictHTML(sheet) {
   const c = sheet.cloneNode(true);
   c.querySelectorAll(".dict-interim").forEach(sp => sp.remove());
   c.querySelectorAll(".dict-pending").forEach(sp => sp.replaceWith(document.createTextNode(sp.textContent)));
+  c.querySelectorAll(".pg-break").forEach(b => { b.removeAttribute("style"); b.removeAttribute("contenteditable"); });
   return c.innerHTML;
 }
 function dictSetUI(on) {
