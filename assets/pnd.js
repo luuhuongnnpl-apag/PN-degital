@@ -655,7 +655,7 @@ function stripHtmlText(html) {
   return (d.textContent || d.innerText || "").replace(/\s+/g, " ").trim();
 }
 
-async function createNoteDocument(folderId, customTitle, tpl) {
+async function createNoteDocument(folderId, customTitle, tpl, htmlOverride) {
   let targetFolder = folderId && tree[folderId] ? folderId : catRootId("bst-ghi-chu");
   if (!targetFolder || !tree[targetFolder]) {
     const gcRoot = catRootId("bst-ghi-chu") || "root-bst-ghi-chu";
@@ -665,7 +665,7 @@ async function createNoteDocument(folderId, customTitle, tpl) {
   const nameIn = (customTitle != null ? customTitle : (($("#quickNoteName") || {}).value || "")).trim();
   const tplIn = tpl || (($("#quickNoteTpl") || {}).value || "blank");
   const title = nameIn || ("Văn bản ghi chú - " + fmtDate(todayISO()) + " " + new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }));
-  const htmlContent = buildNoteTemplate(tplIn, title);
+  const htmlContent = htmlOverride || buildNoteTemplate(tplIn, title);
   const plainSummary = stripHtmlText(htmlContent).slice(0, 240);
   const now = new Date().toISOString();
   const node = tree[targetFolder];
@@ -2409,6 +2409,201 @@ async function dictDrain(d) {
   d.busy = false;
 }
 
+
+/* ---------- Ghi âm cuộc họp → chuyển thành văn bản (thủ công, sau khi ghi xong) ---------- */
+// Ghi: micro tăng độ nhạy (tự cân mức + khuếch đại + nén). Một bản ghi liền để nghe lại/tải về;
+// song song cắt các đoạn ~5 phút để Gemini chép lời từng đoạn khi bấm "Chuyển thành văn bản".
+const REC_PIECE = 300;          // giây mỗi đoạn gửi Gemini
+let rec = null;                 // phiên ghi đang chạy
+let recDone = null;             // bản ghi đã xong: { name, full: Blob, pieces: [Blob]|null, file: File|null, dur }
+let recModel = null;
+function recFmt(sec) { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return (h ? h + ":" + String(m).padStart(2, "0") : String(m).padStart(2, "0")) + ":" + String(x).padStart(2, "0"); }
+function recElapsed() { if (!rec) return 0; return rec.acc + (rec.paused ? 0 : (performance.now() - rec.since) / 1000); }
+function recUI() {
+  const on = !!rec;
+  $("#recStart").disabled = on; $("#recPause").disabled = !on; $("#recStop").disabled = !on;
+  $("#recPause").textContent = rec && rec.paused ? "▶ Ghi tiếp" : "⏸ Tạm dừng";
+  $("#recFileLbl").classList.toggle("disabled", on); $("#recFile").disabled = on;
+  $("#btnRec").textContent = on ? (rec.paused ? "⏸ Đang tạm dừng " : "● Đang ghi ") + recFmt(recElapsed()) : "🎙 Ghi âm cuộc họp";
+  $("#btnRec").classList.toggle("rec-on", on && !rec.paused);
+}
+function recShowResult() {
+  const box = $("#recResult");
+  if (!recDone) { box.hidden = true; return; }
+  box.hidden = false;
+  $("#recName").textContent = recDone.name + (recDone.dur ? " · " + recFmt(recDone.dur) : "");
+  const a = $("#recAudio"); if (a.src) URL.revokeObjectURL(a.src);
+  a.src = URL.createObjectURL(recDone.full);
+  $("#recSave").hidden = !!recDone.file;
+  $("#recTrans").disabled = false;
+  $("#recProg").textContent = "";
+}
+function openRec() { recUI(); recShowResult(); const d = $("#dlgRec"); if (!d.open) d.showModal(); }
+async function recStart() {
+  if (rec) return;
+  if (!window.MediaRecorder || !navigator.mediaDevices) { toast("Trình duyệt chưa hỗ trợ ghi âm. Sếp dùng Chrome hoặc Edge bản mới.", "err"); return; }
+  if (recDone && !recDone.saved && !await ask("Bản ghi trước chưa chuyển thành văn bản hoặc tải về. Ghi mới sẽ thay bản đó. Tiếp tục?")) return;
+  stopDictation();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { autoGainControl: true, noiseSuppression: false, echoCancellation: false, channelCount: 1 } }); }
+  catch (e) { toast("Chưa được dùng micro. Sếp bấm biểu tượng ổ khóa cạnh địa chỉ web → cho phép Micro, rồi bấm lại.", "err"); return; }
+  // Tăng độ nhạy: khuếch đại + nén để giọng nhỏ/ở xa vẫn rõ, giọng to không bị vỡ
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const src = ctx.createMediaStreamSource(stream);
+  const gain = ctx.createGain(); gain.gain.value = 3;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -45; comp.knee.value = 25; comp.ratio.value = 8; comp.attack.value = 0.003; comp.release.value = 0.25;
+  const an = ctx.createAnalyser(); an.fftSize = 1024;
+  const dest = ctx.createMediaStreamDestination();
+  src.connect(gain); gain.connect(comp); comp.connect(dest); comp.connect(an);
+  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "");
+  const opt = mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : {};
+  const full = new MediaRecorder(dest.stream, opt), fullParts = [];
+  full.ondataavailable = e => { if (e.data && e.data.size) fullParts.push(e.data); };
+  rec = { stream, ctx, dest, an, opt, full, fullParts, pieces: [], piece: null, acc: 0, since: performance.now(), paused: false, pieceAt: 0, started: new Date(), wake: null };
+  full.start(1000);
+  recNewPiece();
+  try { if (navigator.wakeLock) rec.wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+  rec.timer = setInterval(recTick, 250);
+  recDone = null; recShowResult(); recUI();
+}
+function recNewPiece() {
+  const r = new MediaRecorder(rec.dest.stream, rec.opt), parts = [];
+  r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+  const p = { r, parts, done: null };
+  p.done = new Promise(res => { r.onstop = () => res(new Blob(parts, { type: r.mimeType || "audio/webm" })); });
+  r.start(1000);
+  rec.pieces.push(p); rec.piece = p; rec.pieceAt = recElapsed();
+}
+function recTick() {
+  if (!rec) return;
+  const t = recElapsed();
+  $("#recClock").textContent = (rec.paused ? "⏸ " : "● ") + recFmt(t);
+  // Thanh mức tiếng: cho sếp thấy micro có bắt được tiếng hay không
+  const buf = new Uint8Array(rec.an.fftSize); rec.an.getByteTimeDomainData(buf);
+  let peak = 0; for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
+  $("#recLevel").style.width = (rec.paused ? 0 : Math.min(100, peak / 128 * 140)) + "%";
+  if (!rec.paused && t - rec.pieceAt >= REC_PIECE) { const old = rec.piece; recNewPiece(); setTimeout(() => { try { old.r.stop(); } catch (e) {} }, 2000); }
+  if (Math.floor(t * 4) % 4 === 0) recUI();
+}
+function recPause() {
+  if (!rec) return;
+  if (rec.paused) { rec.full.resume(); rec.piece.r.resume(); rec.since = performance.now(); rec.paused = false; }
+  else { rec.full.pause(); rec.piece.r.pause(); rec.acc += (performance.now() - rec.since) / 1000; rec.paused = true; }
+  recUI();
+}
+async function recStop() {
+  if (!rec) return;
+  const r = rec; const dur = recElapsed();
+  clearInterval(r.timer);
+  const fullDone = new Promise(res => { r.full.onstop = () => res(new Blob(r.fullParts, { type: r.full.mimeType || "audio/webm" })); });
+  try { if (r.full.state !== "inactive") r.full.stop(); } catch (e) {}
+  r.pieces.forEach(p => { try { if (p.r.state !== "inactive") p.r.stop(); } catch (e) {} });
+  const [full, ...pieces] = await Promise.all([fullDone, ...r.pieces.map(p => p.done)]);
+  r.stream.getTracks().forEach(t => t.stop());
+  try { r.ctx.close(); } catch (e) {}
+  try { if (r.wake) r.wake.release(); } catch (e) {}
+  rec = null;
+  const st = r.started;
+  recDone = { name: "Ghi âm cuộc họp " + st.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" }), full, pieces: pieces.filter(b => b.size > 2000), file: null, dur, saved: false, when: st };
+  $("#recClock").textContent = "■ " + recFmt(dur); $("#recLevel").style.width = "0";
+  recUI(); recShowResult();
+  toast("Đã dừng ghi (" + recFmt(dur) + "). Bấm “📝 Chuyển thành văn bản” khi sếp cần.", "ok");
+  if (!$("#dlgRec").open) $("#dlgRec").showModal();
+}
+function recPickFile(f) {
+  if (!f) return;
+  recDone = { name: f.name.replace(/\.[^.]+$/, ""), full: f, pieces: null, file: f, dur: 0, saved: true, when: new Date(f.lastModified || Date.now()) };
+  $("#recClock").textContent = "00:00"; recShowResult();
+  const a = $("#recAudio"); a.onloadedmetadata = () => { if (isFinite(a.duration)) { recDone.dur = a.duration; $("#recName").textContent = recDone.name + " · " + recFmt(a.duration); } };
+}
+function recDownload() {
+  if (!recDone) return;
+  const ext = /mp4/.test(recDone.full.type) ? "m4a" : "webm";
+  const a = document.createElement("a"); a.href = URL.createObjectURL(recDone.full); a.download = recDone.name.replace(/[\\/:*?"<>|]+/g, "-") + "." + ext;
+  document.body.appendChild(a); a.click(); a.remove(); recDone.saved = true;
+}
+function wavFromBuffer(ab, from, to) {
+  // AudioBuffer (đã ở 16 kHz) → WAV 16-bit đơn kênh, đoạn [from, to) theo mẫu
+  const n = to - from, chs = ab.numberOfChannels, out = new ArrayBuffer(44 + n * 2), v = new DataView(out), rate = ab.sampleRate;
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+  const data = []; for (let c = 0; c < chs; c++) data.push(ab.getChannelData(c));
+  for (let i = 0, o = 44; i < n; i++, o += 2) { let x = 0; for (let c = 0; c < chs; c++) x += data[c][from + i]; x /= chs; x = Math.max(-1, Math.min(1, x)); v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+  return new Blob([out], { type: "audio/wav" });
+}
+async function decode16k(blob) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC({ sampleRate: 16000 });
+  try { return await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { try { ctx.close(); } catch (e) {} }
+}
+function b64Of(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = rej; fr.readAsDataURL(blob); }); }
+async function getRecModel() {
+  if (recModel) return recModel;
+  const { mod, ai } = await getAIInst();
+  recModel = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", generationConfig: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } } });
+  return recModel;
+}
+async function recTranscribePiece(wav, startSec, tail, speakers) {
+  const prompt = `Đây là một đoạn ghi âm cuộc họp bằng tiếng Việt, bắt đầu tại thời điểm ${recFmt(startSec)} của cuộc họp. Người nói có thể dùng giọng Bắc, Trung, Nam hoặc giọng địa phương, có người nói nhỏ hoặc ở xa micro: hãy nghe kỹ theo ngữ cảnh.
+Nhiệm vụ: chép lại NGUYÊN VĂN lời nói thành chữ tiếng Việt, đủ dấu câu, đúng chính tả.
+- Mỗi lượt lời một dòng, dạng: [mm:ss] Người N: nội dung. Thời điểm tính từ đầu cuộc họp (cộng thêm ${recFmt(startSec)}).
+- Phân biệt người nói theo giọng; giữ nhất quán nhãn người nói với phần trước${speakers.length ? " (đã có: " + speakers.join(", ") + ")" : ""}. Nếu người nói được gọi tên hoặc tự giới thiệu thì dùng tên thật.
+- Chỗ nghe không rõ: không đoán, ghi [không rõ].
+- Bỏ tiếng ồn, tiếng ậm ừ vô nghĩa. Không tóm tắt, không bình luận, không thêm nội dung.
+- Vài giây đầu có thể trùng với cuối phần trước: bỏ phần đã có.
+- Nếu không có lời nói, chỉ trả về: (không có lời nói)${tail ? "\n\nCuối phần trước (chỉ để nối mạch, không chép lại):\n" + tail : ""}`;
+  const m = await getRecModel();
+  const r = await m.generateContent([{ inlineData: { mimeType: "audio/wav", data: await b64Of(wav) } }, { text: prompt }]);
+  return (r.response.text() || "").trim();
+}
+async function recTranscribe() {
+  if (!recDone) return;
+  const btn = $("#recTrans"), prog = $("#recProg");
+  btn.disabled = true;
+  try {
+    // Chuẩn bị các đoạn: { wav, start }
+    prog.textContent = "Đang chuẩn bị âm thanh…";
+    const jobs = [];
+    if (recDone.pieces && recDone.pieces.length) {
+      let start = 0;
+      for (const b of recDone.pieces) { const ab = await decode16k(b); jobs.push({ ab, start }); start += Math.max(0, ab.duration - 2); }
+    } else {
+      const ab = await decode16k(recDone.full);
+      const step = REC_PIECE * ab.sampleRate, ov = 2 * ab.sampleRate;
+      for (let i = 0; i < ab.length; i += step) jobs.push({ ab, start: i / ab.sampleRate, from: Math.max(0, i - (i ? ov : 0)), to: Math.min(ab.length, i + step) });
+    }
+    const lines = [];
+    for (let k = 0; k < jobs.length; k++) {
+      const j = jobs[k];
+      prog.textContent = `Đang chuyển thành chữ đoạn ${k + 1}/${jobs.length}… (giữ cửa sổ này mở)`;
+      const wav = wavFromBuffer(j.ab, j.from || 0, j.to || j.ab.length);
+      const tail = lines.slice(-5).join("\n");
+      const speakers = [...new Set(lines.map(l => (l.match(/^\[[\d:]+\]\s*([^:]{1,40}):/) || [])[1]).filter(Boolean))].slice(0, 15);
+      let txt = null, err = null;
+      for (let t = 0; t < 3 && txt == null; t++) { try { txt = await recTranscribePiece(wav, j.start, tail, speakers); } catch (e) { err = e; await new Promise(r => setTimeout(r, 4000 * (t + 1))); } }
+      if (txt == null) lines.push(`[${recFmt(j.start)}] ⚠ Chưa chuyển được đoạn này (${(err && err.message) || "lỗi kết nối"}).`);
+      else if (!/^\(không có lời nói\)$/i.test(txt)) lines.push(...txt.split(/\n+/).map(x => x.trim()).filter(Boolean));
+    }
+    const body = lines.map(l => {
+      let h = esc(l);
+      h = h.replace(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^:]{1,40}):/, (a, ts, who) => `<span style="color:#64748b">[${ts}]</span> <b>${who}:</b>`);
+      return `<p>${h}</p>`;
+    }).join("") || "<p><i>(Không nhận ra lời nói trong bản ghi.)</i></p>";
+    const when = recDone.when.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" });
+    const html = `<h2 style="margin-top:0">${esc(recDone.name)}</h2><p><i>Thời điểm: ${when}${recDone.dur ? " · Thời lượng: " + recFmt(recDone.dur) : ""} · Chép lời bằng Gemini — cần nghe lại để đối chiếu những chỗ quan trọng.</i></p>${body}`;
+    recDone.saved = true;
+    prog.textContent = "Xong. Đã tạo ghi chú mới.";
+    $("#dlgRec").close();
+    await createNoteDocument(catRootId("bst-ghi-chu"), recDone.name, "blank", html);
+  } catch (e) {
+    prog.textContent = "Chưa chuyển được: " + (e.message || e);
+  } finally { btn.disabled = false; }
+}
+window.addEventListener("beforeunload", e => { if (rec || (recDone && !recDone.saved)) { e.preventDefault(); e.returnValue = ""; } });
+
 /* ---------- Mô hình Gemini dùng cho tóm tắt ---------- */
 let sumModel = null;
 async function getSumModel() {
@@ -2633,6 +2828,13 @@ document.addEventListener("drop", async e => {
   }
   const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
 $("#btnAI").onclick = openAI;
+$("#btnRec").onclick = openRec;
+$("#recStart").onclick = recStart;
+$("#recPause").onclick = recPause;
+$("#recStop").onclick = recStop;
+$("#recSave").onclick = recDownload;
+$("#recTrans").onclick = recTranscribe;
+$("#recFile").onchange = e => { recPickFile(e.target.files && e.target.files[0]); e.target.value = ""; };
 $("#btnScan").onclick = () => scanDrive(false);
 $("#btnInit").onclick = initTree;
 $("#btnShare").onclick = shareAll;

@@ -475,3 +475,13 @@ details.more .fld{margin-top:8px}
 .infile-toolbar .sum-btn{color:#7c3aed;border-color:#c4b5fd}
 .infile-toolbar .sum-btn:disabled{opacity:.7;cursor:progress}
 .note-summary{background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:6px;padding:8px 12px;margin:0 0 12px}
+
+/* Ghi âm cuộc họp */
+.rec-box{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:10px;background:#f8fafc}
+.rec-clock{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;color:#b91c1c;text-align:center}
+.rec-meter{height:8px;border-radius:4px;background:#e2e8f0;overflow:hidden}
+.rec-meter span{display:block;height:100%;width:0;background:linear-gradient(90deg,#16a34a,#eab308 70%,#dc2626);transition:width .15s}
+.rec-btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+.rec-btns label.btn{cursor:pointer}
+.rec-btns label.btn.disabled{opacity:.5;pointer-events:none}
+#btnRec.rec-on{background:#dc2626;color:#fff!important;animation:dictPulse 1.4s infinite}

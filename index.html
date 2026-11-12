@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261111g">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261112a">
 </head>
 <body>
 <header class="top">
@@ -63,6 +63,7 @@
     <section class="sbox">
       <h3 class="sbox-title">CÔNG CỤ</h3>
       <button type="button" class="sbtn primary" id="btnAI">Hỏi trợ lý AI</button>
+      <button type="button" class="sbtn" id="btnRec" style="border-color:#b91c1c;color:#b91c1c">🎙 Ghi âm cuộc họp</button>
       <button type="button" class="sbtn" data-newnote style="border-color:var(--forest);color:var(--forest)">📝 Tạo văn bản bằng ghi chú</button>
       <button type="button" class="sbtn" id="btnPw" hidden>Đổi mật khẩu</button>
       <div class="up-only" id="adminTools">
@@ -205,6 +206,34 @@
   </div>
 </dialog>
 
+<!-- Ghi âm cuộc họp -->
+<dialog id="dlgRec" class="dlg wide">
+  <div class="dlg-in">
+    <h3>GHI ÂM CUỘC HỌP</h3>
+    <p class="muted" style="margin-top:0">Ghi âm xong, bấm <b>“Chuyển thành văn bản”</b>: Gemini nghe lại cả file và chép lời thành một ghi chú mới. Có thể chọn file ghi âm sẵn (ghi bằng điện thoại, máy ghi âm…). Đóng cửa sổ này thì việc ghi vẫn tiếp tục.</p>
+    <div class="rec-box">
+      <div class="rec-clock" id="recClock">00:00</div>
+      <div class="rec-meter" title="Mức tiếng micro thu được"><span id="recLevel"></span></div>
+      <div class="rec-btns">
+        <button type="button" class="btn primary" id="recStart">● Bắt đầu ghi</button>
+        <button type="button" class="btn" id="recPause" disabled>⏸ Tạm dừng</button>
+        <button type="button" class="btn danger" id="recStop" disabled>■ Dừng</button>
+        <label class="btn" id="recFileLbl">📂 Chọn file ghi âm có sẵn<input type="file" id="recFile" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.aac,.ogg,.webm,.amr" hidden></label>
+      </div>
+    </div>
+    <div id="recResult" hidden>
+      <p id="recName" style="margin:10px 0 4px;font-weight:600"></p>
+      <audio id="recAudio" controls style="width:100%"></audio>
+      <div class="rec-btns">
+        <button type="button" class="btn primary" id="recTrans">📝 Chuyển thành văn bản</button>
+        <button type="button" class="btn" id="recSave">⬇ Tải file ghi âm về máy</button>
+      </div>
+      <p id="recProg" class="muted" style="margin:6px 0 0"></p>
+    </div>
+    <div class="dlg-act"><button type="button" class="btn" data-close>Đóng</button></div>
+  </div>
+</dialog>
+
 <!-- Xác nhận (thay cho hộp thoại trình duyệt) -->
 <dialog id="dlgConfirm" class="dlg">
   <form method="dialog" class="dlg-in">
@@ -234,7 +263,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="./config.js?v=20261111g"></script>
-<script type="module" src="./assets/pnd.js?v=20261111g"></script>
+<script src="./config.js?v=20261112a"></script>
+<script type="module" src="./assets/pnd.js?v=20261112a"></script>
 </body>
 </html>
