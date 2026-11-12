@@ -22,7 +22,7 @@ window.PND_CONFIG = {
   // Khóa reCAPTCHA (Fraud Defense) công khai cho App Check — bảo vệ Hỏi AI khỏi bị lạm dụng
   APPCHECK_SITE_KEY: "6LdANxAuAAAAAKIjvQ50BAohlCrqbEb_YHFQzOag",
   // Mô hình Gemini dùng cho Hỏi AI
-  AI_MODEL: "gemini-2.5-flash",
+  AI_MODEL: "gemini-3.8-flash",
   LINKS: {
     pnl: "https://luuhuongnnpl-apag.github.io/phuc-nguyen-library/",
     pnw: "https://luuhuongnnpl-apag.github.io/Phuc-nguyen-work/",

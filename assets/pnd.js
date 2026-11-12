@@ -2212,6 +2212,20 @@ async function getAIInst() {
   return aiInst;
 }
 
+/* Chọn mẫu Gemini: dùng mẫu trong cấu hình; nếu Google đã ngừng mẫu đó thì tự chuyển sang mẫu dự phòng và nhớ lại */
+const AI_MODELS = [...new Set([CFG.AI_MODEL, "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"].filter(Boolean))];
+let aiModelIdx = (() => { try { const k = localStorage.getItem("pnd_ai_model"); const i = AI_MODELS.indexOf(k); return i >= 0 ? i : 0; } catch (e) { return 0; } })();
+const aiModelGone = e => /\b404\b|no longer available|not found|not supported|deprecated|retired|unknown model|limit: 0\b/i.test((e && e.message) || "");
+function aiNextModel() { if (aiModelIdx >= AI_MODELS.length - 1) return false; aiModelIdx++; try { localStorage.setItem("pnd_ai_model", AI_MODELS[aiModelIdx]); } catch (e) {} return true; }
+function aiWrap(opts) {
+  return { async generateContent(req) {
+    const { mod, ai } = await getAIInst();
+    for (;;) {
+      try { return await mod.getGenerativeModel(ai, { ...opts, model: AI_MODELS[aiModelIdx] }).generateContent(req); }
+      catch (e) { if (!aiModelGone(e) || !aiNextModel()) throw e; }
+    }
+  } };
+}
 function aiAdd(cls, text) { const p = document.createElement("div"); p.className = "ai-msg " + cls; p.textContent = text; $("#aiLog").appendChild(p); $("#aiLog").scrollTop = 1e9; return p; }
 function contextText() {
   const lines = Object.values(items).filter(f => canSee(f)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
@@ -2220,7 +2234,7 @@ function contextText() {
 async function getChat() {
   if (aiChat) return aiChat;
   const { mod, ai } = await getAIInst();
-  const model = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
+  const model = mod.getGenerativeModel(ai, { model: AI_MODELS[aiModelIdx], systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
   aiChat = model.startChat({ history: [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }] });
   return aiChat;
 }
@@ -2236,7 +2250,11 @@ async function askAI(e) {
     const r = await chat.sendMessageStream(q); let txt = "";
     for await (const ch of r.stream) { txt += ch.text(); bot.textContent = txt; $("#aiLog").scrollTop = 1e9; }
     if (!txt) bot.textContent = "(Không có câu trả lời.)";
-  } catch (x) { bot.textContent = "Chưa hỏi được: " + (x.message || x); aiChat = null; }
+  } catch (x) {
+    aiChat = null;
+    if (aiModelGone(x) && aiNextModel()) { bot.textContent = "…"; $("#aiInput").value = q; $("#aiLog").removeChild(bot); $("#aiLog").lastChild && $("#aiLog").removeChild($("#aiLog").lastChild); return askAI(e); }
+    bot.textContent = "Chưa hỏi được: " + (x.message || x);
+  }
 }
 
 /* ---------- Ghi âm → chữ trực tiếp trong văn bản ghi chú ---------- */
@@ -2373,10 +2391,8 @@ function basicPunct(raw, ctx) {
 async function getPunctModel() {
   if (punctModel) return punctModel;
   const { mod, ai } = await getAIInst();
-  punctModel = mod.getGenerativeModel(ai, {
-    model: CFG.AI_MODEL || "gemini-2.5-flash",
-    systemInstruction: "Bạn là bộ chuẩn hóa văn bản đọc chính tả tiếng Việt. Nhiệm vụ duy nhất: thêm dấu câu và viết hoa đúng chính tả tiếng Việt (đầu câu, tên riêng, tên cơ quan, tên văn bản pháp luật). Giữ nguyên từng từ, thứ tự từ; không thêm, bớt, diễn đạt lại hay giải thích. Chỉ trả về đúng đoạn mới đã chuẩn hóa.",
-    generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
+  punctModel = aiWrap({
+    systemInstruction: "Bạn là bộ chuẩn hóa văn bản đọc chính tả tiếng Việt. Nhiệm vụ duy nhất: thêm dấu câu và viết hoa đúng chính tả tiếng Việt (đầu câu, tên riêng, tên cơ quan, tên văn bản pháp luật). Giữ nguyên từng từ, thứ tự từ; không thêm, bớt, diễn đạt lại hay giải thích. Chỉ trả về đúng đoạn mới đã chuẩn hóa."
   });
   return punctModel;
 }
@@ -2543,7 +2559,7 @@ function b64Of(blob) { return new Promise((res, rej) => { const fr = new FileRea
 async function getRecModel() {
   if (recModel) return recModel;
   const { mod, ai } = await getAIInst();
-  recModel = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", generationConfig: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } } });
+  recModel = aiWrap({});
   return recModel;
 }
 async function recTranscribePiece(wav, startSec, tail, speakers) {
@@ -2609,7 +2625,7 @@ let sumModel = null;
 async function getSumModel() {
   if (sumModel) return sumModel;
   const { mod, ai } = await getAIInst();
-  sumModel = mod.getGenerativeModel(ai, { model: CFG.AI_MODEL || "gemini-2.5-flash", generationConfig: { temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } });
+  sumModel = aiWrap({});
   return sumModel;
 }
 function mdLite(md) {
