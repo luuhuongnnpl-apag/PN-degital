@@ -2269,7 +2269,9 @@ function cleanDictHTML(sheet) {
 }
 function dictSetUI(on) {
   const b = document.querySelector("[data-dictate]");
-  if (b) { b.classList.toggle("on", on); b.textContent = on ? "⏹ Dừng" : "🎤 Ghi âm"; }
+  if (b) { b.classList.toggle("on", on); b.textContent = on ? (dict && dict.meeting ? "⏹ Dừng ghi cuộc họp" : "⏹ Dừng") : "🎤 Ghi âm"; }
+  const m = $("#btnRec"), mtg = on && dict && dict.meeting;
+  if (m) { m.classList.toggle("rec-on", !!mtg); m.textContent = mtg ? "● Đang ghi cuộc họp" : "🎙 Ghi âm cuộc họp"; }
 }
 function dictCaretRange(sheet) {
   const sel = window.getSelection();
@@ -2295,13 +2297,15 @@ async function dictBoostedTrack() {
     return { track: dest.stream.getAudioTracks()[0], stop: () => { stream.getTracks().forEach(t => t.stop()); try { ctx.close(); } catch (e) {} } };
   } catch (e) { return null; }
 }
-async function startDictation() {
+async function startDictation(opts) {
+  const meeting = !!(opts && opts.meeting);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const sheet = $("#inFileSheet");
   if (!sheet) return;
   if (!SR) { toast("Trình duyệt này chưa hỗ trợ ghi âm thành chữ. Sếp dùng Chrome hoặc Edge; trên iPhone/iPad dùng nút micro của bàn phím.", "err"); return; }
-  const range = dictCaretRange(sheet);
-  const d = dict = { sheet, range, queue: [], busy: false, ctx: stripHtmlText(sheet.innerHTML).slice(-300), fails: 0, interim: null, boost: null, useTrack: false, rec: null };
+  let range = dictCaretRange(sheet);
+  if (meeting) { range = document.createRange(); range.selectNodeContents(sheet); range.collapse(false); }
+  const d = dict = { meeting, t0: Date.now(), lastFinal: 0, para: null, wake: null, sheet, range, queue: [], busy: false, ctx: stripHtmlText(sheet.innerHTML).slice(-300), fails: 0, interim: null, boost: null, useTrack: false, rec: null };
   dictSetUI(true);
   d.boost = await dictBoostedTrack();
   if (dict !== d) { if (d.boost) d.boost.stop(); return; }
@@ -2315,7 +2319,7 @@ async function startDictation() {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const r = ev.results[i], txt = (r[0] && r[0].transcript || "").trim();
         if (!txt) continue;
-        if (r.isFinal) { dictShowInterim(d, ""); dictInsert(d, txt); } else interim += txt + " ";
+        if (r.isFinal) { dictShowInterim(d, ""); if (d.meeting) mtgInsert(d, txt); else dictInsert(d, txt); } else interim += txt + " ";
       }
       dictShowInterim(d, interim.trim());
     };
@@ -2333,6 +2337,7 @@ async function startDictation() {
     rec.start();
   };
   try { launch(); } catch (e) { dict = null; dictSetUI(false); if (d.boost) d.boost.stop(); toast("Không bật được micro: " + (e.message || e), "err"); return; }
+  if (meeting) { try { if (navigator.wakeLock) d.wake = await navigator.wakeLock.request("screen"); } catch (e) {} }
   const keep = d.range.cloneRange();
   sheet.focus();
   const sel = window.getSelection();
@@ -2354,7 +2359,8 @@ function stopDictation() {
   // Phần đang nghe dở: đưa luôn vào văn bản
   const rest = d.interim && d.interim.isConnected ? d.interim.textContent.trim() : "";
   if (d.interim) { d.interim.remove(); d.interim = null; }
-  if (rest) dictInsert(d, rest, true);
+  if (rest) { if (d.meeting) mtgInsert(d, rest, true); else dictInsert(d, rest, true); }
+  try { if (d.wake) d.wake.release(); } catch (e) {}
   try { if (d.rec) { d.rec.onend = null; d.rec.onresult = null; d.rec.stop(); } } catch (e) {}
   if (d.boost) d.boost.stop();
   dictSetUI(false);
@@ -2362,7 +2368,7 @@ function stopDictation() {
 }
 // Bấm sang chỗ khác trong văn bản thì chữ ghi tiếp sẽ vào chỗ đó
 document.addEventListener("selectionchange", () => {
-  if (!dict) return;
+  if (!dict || dict.meeting) return;
   const sel = window.getSelection();
   if (sel && sel.rangeCount && dict.sheet.contains(sel.getRangeAt(0).startContainer) && !(dict.interim && dict.interim.contains(sel.getRangeAt(0).startContainer))) { const r = sel.getRangeAt(0).cloneRange(); r.collapse(false); dict.range = r; }
 });
@@ -2381,6 +2387,36 @@ function dictInsert(d, raw, force) {
   d.sheet.dispatchEvent(new Event("input"));
   d.queue.push({ sp, raw, lead });
   dictDrain(d);
+}
+/* Ghi cuộc họp (phương án A): chữ nhận dạng trực tiếp ghi nối vào cuối ghi chú, không gửi Gemini.
+   Ngắt quãng trên 8 giây thì sang đoạn mới, đầu đoạn có mốc thời gian [mm:ss]. */
+const MTG_GAP = 8000;
+function mtgInsert(d, raw, force) {
+  if (!d || (!force && dict !== d) || !d.sheet.isConnected) return;
+  const now = Date.now();
+  if (!d.para || !d.para.isConnected || now - d.lastFinal > MTG_GAP) {
+    d.para = document.createElement("p");
+    const ts = document.createElement("span"); ts.style.color = "#64748b"; ts.textContent = "[" + recFmt((now - d.t0) / 1000) + "]";
+    d.para.appendChild(ts);
+    d.sheet.appendChild(d.para);
+  }
+  d.lastFinal = now;
+  d.para.appendChild(document.createTextNode(" " + raw.trim()));
+  const r = document.createRange(); r.selectNodeContents(d.para); r.collapse(false); d.range = r;
+  d.para.scrollIntoView({ block: "nearest" });
+  d.sheet.dispatchEvent(new Event("input"));
+}
+async function mtgStart() {
+  if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) { toast("Trình duyệt này chưa hỗ trợ ghi âm thành chữ. Sếp dùng Chrome hoặc Edge trên máy tính.", "err"); return; }
+  if ($("#dlgRec").open) $("#dlgRec").close();
+  stopDictation();
+  const st = new Date();
+  const name = "Ghi âm cuộc họp " + st.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" });
+  const html = `<h2 style="margin-top:0">${esc(name)}</h2><p><i>Chép lời trực tiếp bằng nhận dạng giọng nói của trình duyệt — cần rà lại những chỗ quan trọng.</i></p>`;
+  await createNoteDocument(catRootId("bst-ghi-chu"), name, "blank", html);
+  if (!$("#inFileSheet")) { toast("Chưa mở được ghi chú để ghi.", "err"); return; }
+  await startDictation({ meeting: true });
+  if (dict && dict.meeting) toast("Đang ghi cuộc họp. Chữ chạy thẳng vào ghi chú này. Bấm “⏹ Dừng ghi cuộc họp” để kết thúc; đóng ghi chú cũng sẽ dừng ghi.", "ok");
 }
 function basicPunct(raw, ctx) {
   let t = raw.trim(); if (!t) return t;
@@ -2618,7 +2654,7 @@ async function recTranscribe() {
     prog.textContent = "Chưa chuyển được: " + (e.message || e);
   } finally { btn.disabled = false; }
 }
-window.addEventListener("beforeunload", e => { if (rec || (recDone && !recDone.saved)) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => { if (rec || (dict && dict.meeting) || (recDone && !recDone.saved)) { e.preventDefault(); e.returnValue = ""; } });
 
 /* ---------- Mô hình Gemini dùng cho tóm tắt ---------- */
 let sumModel = null;
@@ -2844,8 +2880,8 @@ document.addEventListener("drop", async e => {
   }
   const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
 $("#btnAI").onclick = openAI;
-$("#btnRec").onclick = openRec;
-$("#recStart").onclick = recStart;
+$("#btnRec").onclick = () => { if (dict && dict.meeting) toast("Đang ghi cuộc họp. Bấm “⏹ Dừng ghi cuộc họp” trong ghi chú để kết thúc.", "ok"); else openRec(); };
+$("#recStart").onclick = mtgStart;
 $("#recPause").onclick = recPause;
 $("#recStop").onclick = recStop;
 $("#recSave").onclick = recDownload;

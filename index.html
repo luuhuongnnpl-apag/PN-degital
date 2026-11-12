@@ -210,14 +210,14 @@
 <dialog id="dlgRec" class="dlg wide">
   <div class="dlg-in">
     <h3>GHI ÂM CUỘC HỌP</h3>
-    <p class="muted" style="margin-top:0">Ghi âm xong, bấm <b>“Chuyển thành văn bản”</b>: Gemini nghe lại cả file và chép lời thành một ghi chú mới. Có thể chọn file ghi âm sẵn (ghi bằng điện thoại, máy ghi âm…). Đóng cửa sổ này thì việc ghi vẫn tiếp tục.</p>
+    <p class="muted" style="margin-top:0">Bấm <b>“● Bắt đầu ghi”</b>: web tạo một ghi chú mới, nói đến đâu chữ hiện vào ghi chú đến đó (như nút 🎤). Ngắt quãng lâu thì tự sang đoạn mới có mốc giờ. Chỉ dừng khi sếp bấm <b>“⏹ Dừng ghi cuộc họp”</b> trong ghi chú. Dùng Chrome hoặc Edge, cần có mạng. Không lưu file âm thanh.<br>Nếu đã có file ghi âm sẵn (ghi bằng điện thoại…), chọn file rồi bấm “Chuyển thành văn bản” — cách này dùng Gemini.</p>
     <div class="rec-box">
-      <div class="rec-clock" id="recClock">00:00</div>
-      <div class="rec-meter" title="Mức tiếng micro thu được"><span id="recLevel"></span></div>
+      <div class="rec-clock" id="recClock" hidden>00:00</div>
+      <div class="rec-meter" title="Mức tiếng micro thu được" hidden><span id="recLevel"></span></div>
       <div class="rec-btns">
         <button type="button" class="btn primary" id="recStart">● Bắt đầu ghi</button>
-        <button type="button" class="btn" id="recPause" disabled>⏸ Tạm dừng</button>
-        <button type="button" class="btn danger" id="recStop" disabled>■ Dừng</button>
+        <button type="button" class="btn" id="recPause" disabled hidden>⏸ Tạm dừng</button>
+        <button type="button" class="btn danger" id="recStop" disabled hidden>■ Dừng</button>
         <label class="btn" id="recFileLbl">📂 Chọn file ghi âm có sẵn<input type="file" id="recFile" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.aac,.ogg,.webm,.amr" hidden></label>
       </div>
     </div>
