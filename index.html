@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261113a">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261113b">
 </head>
 <body>
 <header class="top">
@@ -49,7 +49,7 @@
   <div class="content">
     <h2 class="sec-title">DANH MỤC TÀI LIỆU SỐ</h2>
     <form id="searchForm" class="searchbar" role="search">
-      <input id="searchInput" type="search" placeholder="Nhập nội dung tìm kiếm (tên văn bản, số ký hiệu, cơ quan ban hành, ghi chú)…" aria-label="Tìm kiếm tài liệu">
+      <input id="searchInput" type="search" placeholder="Tìm theo tên, số hiệu, cơ quan ban hành và trong nội dung tệp… (đặt trong ngoặc kép để tìm đúng cụm từ)" aria-label="Tìm kiếm tài liệu">
       <button type="submit">TÌM</button>
     </form>
     <main id="main" class="main"></main>
@@ -157,7 +157,7 @@
 <!-- Chi tiết tài liệu -->
 <dialog id="dlgDoc" class="dlg xwide">
   <div class="dlg-in">
-    <div class="doc-head"><h3 id="docTitle"></h3><button type="button" class="btn sm" id="docInfoBtn" title="Hiện / ẩn thông tin tài liệu">ⓘ Thông tin</button><a class="btn sm" id="docNewTab" target="_blank" rel="noopener" title="Mở tài liệu này ở thẻ mới của trình duyệt">↗ Mở thẻ mới</a><button type="button" class="x" data-close aria-label="Đóng">×</button></div>
+    <div class="doc-head"><h3 id="docTitle"></h3><button type="button" class="btn sm ai-btn" data-askai title="Hỏi AI về tài liệu này">✦ Hỏi AI</button><button type="button" class="btn sm" id="docInfoBtn" title="Hiện / ẩn thông tin tài liệu">ⓘ Thông tin</button><a class="btn sm" id="docNewTab" target="_blank" rel="noopener" title="Mở tài liệu này ở thẻ mới của trình duyệt">↗ Mở thẻ mới</a><button type="button" class="x" data-close aria-label="Đóng">×</button></div>
     <div class="doc-detail">
       <div class="doc-preview" id="docPreview"></div>
       <div class="doc-side"><dl class="doc-info" id="docInfo"></dl><div class="doc-acts" id="docActs"></div></div>
@@ -197,15 +197,22 @@
 </dialog>
 
 <!-- Hỏi AI -->
-<dialog id="dlgAI" class="dlg wide">
-  <div class="dlg-in">
-    <h3>HỎI TRỢ LÝ AI</h3>
-    <p class="muted">Trợ lý Gemini trả lời dựa trên danh mục tài liệu bạn được xem trong Phúc Nguyên Digital. Hãy kiểm tra lại với văn bản gốc trước khi sử dụng.</p>
-    <div id="aiLog" class="ai-log" aria-live="polite"></div>
-    <form id="aiForm" class="ai-form"><textarea id="aiInput" rows="2" placeholder="Ví dụ: Quy chế nào quy định giờ chuẩn nghiên cứu khoa học?"></textarea><button class="btn primary" type="submit">Gửi</button></form>
-    <div class="dlg-act"><button type="button" class="btn" data-close>Đóng</button></div>
+<!-- Trợ lý AI dạng bảng bên (như Gemini trong Chrome): mở được ở mọi màn hình, tự hiểu tài liệu / ghi chú đang mở -->
+<aside id="aiDock" class="ai-dock" hidden aria-label="Trợ lý AI">
+  <div class="ai-head">
+    <b>✦ TRỢ LÝ AI</b>
+    <span class="ai-model" id="aiModelTag">Gemini</span>
+    <span style="flex:1"></span>
+    <button type="button" class="btn sm" id="aiNew" title="Bắt đầu cuộc hỏi mới">Mới</button>
+    <button type="button" class="x" id="aiClose" aria-label="Đóng trợ lý">×</button>
   </div>
-</dialog>
+  <div class="ai-ctx" id="aiCtx"></div>
+  <div id="aiLog" class="ai-log" aria-live="polite"></div>
+  <div class="ai-chips" id="aiChips"></div>
+  <form id="aiForm" class="ai-form"><textarea id="aiInput" rows="2" placeholder="Hỏi về tài liệu đang mở, đoạn đang chọn hoặc cả thư viện…"></textarea><button class="btn primary" type="submit">Gửi</button></form>
+  <p class="ai-foot">Gemini có thể sai — đối chiếu văn bản gốc. <a href="https://gemini.google.com/app" target="_blank" rel="noopener" id="aiGemini">Mở Gemini (tài khoản Pro) ↗</a></p>
+</aside>
+<button type="button" class="ai-fab" id="aiFab" title="Hỏi trợ lý AI">✦ Hỏi AI</button>
 
 <!-- Ghi âm cuộc họp -->
 <dialog id="dlgRec" class="dlg wide">
@@ -277,6 +284,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async></script>
 <script src="./config.js?v=20261112b"></script>
-<script type="module" src="./assets/pnd.js?v=20261113a"></script>
+<script type="module" src="./assets/pnd.js?v=20261113b"></script>
 </body>
 </html>

@@ -1564,42 +1564,127 @@ function openDoc(id, forceMode) {
   if (canUp() || f.isLocalNote || f.isNote) acts.push(`<button type="button" class="btn danger" data-del="${esc(f.id)}">🗑 Xóa file</button>`);
   $("#docActs").innerHTML = acts.join("");
   if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
+  if (!$("#aiDock").hidden) setTimeout(() => openAI(), 0);
 }
 $("#docInfoBtn").onclick = () => { const d = $("#dlgDoc"); if (d.classList.contains("word-on")) d.classList.toggle("show-info"); else d.classList.toggle("hide-info"); };
 $("#dlgDoc").addEventListener("close", () => { if (location.hash.startsWith("#xem/")) history.replaceState(null, "", location.pathname + location.search); });
 $("#dlgDoc").addEventListener("close", async () => { stopDictation(); if (currentOpenDocId && $("#inFileSheet")) await saveInFileNote(currentOpenDocId, true); if (ed && ed.ro) ed.ro.disconnect(); ed = null; $("#dlgDoc").classList.remove("word-on", "show-info"); $("#docPreview").innerHTML = ""; currentOpenDocId = null; });
 
 /* ---------- Tìm kiếm ---------- */
-let searchCache = { q: null, hits: null };
 const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+/* ---------- Tìm kiếm ----------
+   Khớp theo TỪ (âm tiết) trọn vẹn, không khớp một phần chữ (trước đây gõ “an” ra cả “ban”, “hành”…).
+   Xếp hạng: đúng cụm từ trong tên > đủ các từ trong tên > số hiệu > thông tin khác > tên thư mục.
+   Tìm trong nội dung tệp (Google Drive, cho người quản lý đã kết nối Drive): đúng cụm từ, rồi đủ các từ; kèm đoạn trích có từ khóa. */
+let searchScope = "all";
+const foldIdx = s => [...String(s || "").normalize("NFC")].map(ch => { const f = fold(ch); return f.length === 1 ? f : (f[0] || " "); }).join("");
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const wordRe = w => new RegExp("(?:^|[^a-z0-9])" + reEsc(w) + "(?![a-z0-9])");
+function parseQuery(q) {
+  const phrases = [...q.matchAll(/"([^"]+)"/g)].map(m => fold(m[1]).trim()).filter(Boolean);
+  const words = fold(q.replace(/"/g, " ")).split(/[\s,;]+/).filter(Boolean);
+  return { phrases, words, phrase: fold(q.replace(/"/g, "")).replace(/\s+/g, " ").trim() };
+}
+function scoreItem(f, P, loose) {
+  const name = fold(f.name), meta = fold([f.number, f.issuer, f.status, f.note, f.desc, f.issued && fmtDate(f.issued)].join(" ")), path = fold(pathOf(f.parent).map(p => p.name).join(" "));
+  const has = (hay, w) => loose ? hay.includes(w) : wordRe(w).test(hay);
+  const all = name + " " + meta + " " + path;
+  if (!P.words.every(w => has(all, w))) return null;
+  if (P.phrases.some(ph => !(name + " " + meta).includes(ph))) return null;
+  let sc = 0, why = "p";
+  const inName = P.words.filter(w => has(name, w)).length, inNM = P.words.filter(w => has(name + " " + meta, w)).length;
+  if (P.words.length > 1 && name.includes(P.phrase)) sc += 120;
+  if (inName === P.words.length) { sc += 70; why = "n"; }
+  sc += inName * 6;
+  if (f.number && fold(f.number).replace(/\s/g, "") === P.phrase.replace(/\s/g, "")) { sc += 150; why = "n"; }
+  if (inNM === P.words.length) { sc += 30; if (why === "p") why = "n"; }
+  if (String(f.name || "").toLowerCase().includes(P.raw)) sc += 25; // đúng cả dấu
+  if (why === "p") sc += 2;
+  return { sc, why };
+}
+function hlText(text, P) {
+  const t = String(text || ""), ft = foldIdx(t).toLowerCase(), marks = [];
+  const terms = [...P.phrases, ...(P.words.length > 1 ? [P.phrase] : []), ...P.words].filter(Boolean);
+  for (const w of terms) { const re = new RegExp("(?:^|[^a-z0-9])(" + reEsc(w) + ")(?![a-z0-9])", "g"); let m; while ((m = re.exec(ft))) { const st = m.index + m[0].length - m[1].length; marks.push([st, st + m[1].length]); if (re.lastIndex === m.index) re.lastIndex++; } }
+  marks.sort((a, b) => a[0] - b[0]);
+  let out = "", pos = 0;
+  for (const [a, b] of marks) { if (a < pos) continue; out += esc(t.slice(pos, a)) + "<mark>" + esc(t.slice(a, b)) + "</mark>"; pos = b; }
+  return out + esc(t.slice(pos));
+}
+const snipCache = {};
+async function fileTextForSnippet(f) {
+  if (snipCache[f.id] !== undefined) return snipCache[f.id];
+  let txt = "";
+  try {
+    const id = driveIdOf(f), m = f.fmime || f.mime || "";
+    if (/google-apps\.(document|presentation|spreadsheet)/.test(m)) {
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=${/spreadsheet/.test(m) ? "text/csv" : "text/plain"}`, { headers: { Authorization: "Bearer " + driveTok } });
+      if (r.ok) txt = await r.text();
+    } else if (fmtOf(f) === "pdf" && !(f.size > 15 * 1024 * 1024)) {
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: "Bearer " + driveTok } });
+      if (r.ok) {
+        const lib = await pdfjsLib(), pdf = await lib.getDocument({ data: new Uint8Array(await r.arrayBuffer()), isEvalSupported: false }).promise;
+        try { for (let i = 1; i <= Math.min(pdf.numPages, 80); i++) { const c = await (await pdf.getPage(i)).getTextContent(); txt += c.items.map(x => x.str + (x.hasEOL ? "\n" : "")).join(" ") + "\n"; } } finally { pdf.destroy(); }
+      }
+    }
+  } catch (e) { console.warn("đoạn trích", e.message); }
+  snipCache[f.id] = txt.replace(/[ \t]+/g, " ");
+  return snipCache[f.id];
+}
+function makeSnippet(txt, P) {
+  if (!txt) return "";
+  const ft = foldIdx(txt).toLowerCase();
+  const terms = [...P.phrases, P.phrase, ...P.words].filter(Boolean);
+  let at = -1;
+  for (const w of terms) { const m = new RegExp("(?:^|[^a-z0-9])" + reEsc(w) + "(?![a-z0-9])").exec(ft); if (m) { at = m.index; break; } }
+  if (at < 0) return "";
+  const a = Math.max(0, at - 90), b = Math.min(txt.length, at + 220);
+  return (a ? "…" : "") + hlText(txt.slice(a, b).replace(/\s+/g, " "), P) + (b < txt.length ? "…" : "");
+}
 async function renderSearch(q) {
   q = q.trim(); $("#searchInput").value = q;
   if (!q) { go(""); return; }
-  const fq = fold(q).split(/\s+/).filter(Boolean);
-  const hit = f => { const hay = fold([f.name, f.issuer, f.number, f.status, f.note, pathOf(f.parent).map(p => p.name).join(" ")].join(" ")); return fq.every(w => hay.includes(w)); };
-  let res = Object.values(items).filter(f => canList(f) && hit(f)).map(f => ({ ...f, hit: false }));
-  const draw = (extra) => {
-    $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2><div class="crumbs">“${esc(q)}” · ${res.length} tài liệu${extra || ""}</div>${res.length ? tableHTML(sortFiles(res), true) : '<p class="empty">Không tìm thấy tài liệu phù hợp.</p>'}${navRow()}</section>`;
+  const P = { ...parseQuery(q), raw: q.replace(/"/g, "").toLowerCase().trim() };
+  if (!P.words.length) { go(""); return; }
+  const pool = Object.values(items).filter(f => canList(f));
+  let loose = false, scored = pool.map(f => ({ f, s: scoreItem(f, P, false) })).filter(x => x.s);
+  if (!scored.length) { loose = true; scored = pool.map(f => ({ f, s: scoreItem(f, P, true) })).filter(x => x.s); }
+  const res = new Map(scored.map(x => [x.f.id, { f: x.f, sc: x.s.sc, why: x.s.why, content: 0, snip: "" }]));
+  const canContent = canUp() && !!driveTok;
+  let state = canUp() ? (driveTok ? "dang-tim" : "chua-ket-noi") : "khong-quyen";
+  const draw = () => {
+    if (!location.hash.startsWith("#tim/")) return;
+    const all = [...res.values()];
+    const contN = all.filter(r => r.content).length;
+    let shown = searchScope === "ten" ? all.filter(r => r.sc > 0) : searchScope === "noidung" ? all.filter(r => r.content) : all;
+    shown.sort((a, b) => (b.sc + b.content) - (a.sc + a.content) || vi.compare(a.f.name, b.f.name));
+    const note = state === "dang-tim" ? "Đang tìm trong nội dung tệp…" : state === "chua-ket-noi" ? "Muốn tìm cả trong nội dung tệp: bấm “Quét Google Drive” một lần để kết nối Drive trên máy này." : state === "khong-quyen" ? "Tìm trong nội dung tệp dành cho tài khoản quản lý; bạn đang tìm theo tên và thông tin tài liệu." : state === "loi" ? "Chưa tìm được trong nội dung tệp lúc này." : "";
+    $("#main").innerHTML = `<section class="box"><h2 class="box-title">KẾT QUẢ TÌM KIẾM</h2>
+      <div class="crumbs">“${esc(q)}” · ${all.length} tài liệu${loose ? " (không có kết quả khớp trọn từ — đang hiện kết quả gần đúng)" : ""}</div>
+      <div class="sr-tabs" role="tablist"><button type="button" data-srscope="all" class="${searchScope === "all" ? "on" : ""}">Tất cả (${all.length})</button><button type="button" data-srscope="ten" class="${searchScope === "ten" ? "on" : ""}">Trong tên & thông tin (${all.filter(r => r.sc > 0).length})</button><button type="button" data-srscope="noidung" class="${searchScope === "noidung" ? "on" : ""}">Trong nội dung tệp (${contN})</button></div>
+      ${note ? `<p class="sr-note">${note}</p>` : ""}
+      ${shown.length ? `<div class="sr-list">${shown.map(r => { const f = r.f, k = fmtOf(f); return `<button type="button" class="sr-item" data-doc="${esc(f.id)}"><span class="sr-ic ${k}">${esc((FMT[k] || FMT.khac)[1])}</span><span class="sr-body"><span class="sr-name">${hlText(f.name, P)}</span>${r.why === "n" ? '<span class="sr-badge n">Khớp tên</span>' : r.sc > 0 ? '<span class="sr-badge p">Khớp thư mục</span>' : ""}${r.content ? `<span class="sr-badge c">${r.content >= 50 ? "Đúng cụm từ trong nội dung" : "Có trong nội dung"}</span>` : ""}<div class="sr-meta">${esc([pathOf(f.parent).map(p => p.name).join(" › "), f.number, f.issuer, yearOfItem(f)].filter(Boolean).join(" · "))}</div>${r.snip ? `<div class="sr-snip">${r.snip}</div>` : ""}</span></button>`; }).join("")}</div>` : `<p class="empty">${searchScope === "noidung" && state === "dang-tim" ? "Đang tìm…" : "Không tìm thấy tài liệu phù hợp."}</p>`}
+      ${navRow()}</section>`;
   };
-  // Đổi bộ lọc trên cùng một từ khóa: dùng lại kết quả tìm trong nội dung, không gọi Drive lần nữa
-  if (canUp() && searchCache.q === q && searchCache.hits) {
-    const ids = new Set(res.map(r => r.id));
-    searchCache.hits.forEach(id => { if (items[id] && !ids.has(id)) res.push({ ...items[id], hit: true }); });
-    draw(" (gồm cả khớp trong nội dung tệp)"); return;
-  }
-  draw(canUp() ? (driveTok ? " · đang tìm cả trong nội dung tệp…" : " · đăng nhập lại Google (bấm Quét) để tìm cả trong nội dung tệp") : "");
-  if (canUp() && driveTok) {
-    try {
-      const ids = new Set(res.map(r => r.id));
-      const qq = "fullText contains '" + q.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "' and trashed=false";
-      const j = await drive("https://www.googleapis.com/drive/v3/files?pageSize=200&fields=files(id)&q=" + encodeURIComponent(qq));
-      const hits = [];
-      (j.files || []).forEach(x => { const key = items[x.id] ? x.id : items["dr-" + x.id] ? "dr-" + x.id : null; if (key) { hits.push(key); if (!ids.has(key)) res.push({ ...items[key], hit: true }); } });
-      searchCache = { q, hits };
-      draw(" (gồm cả khớp trong nội dung tệp)");
-    } catch (e) { draw(" · chưa tìm được trong nội dung: " + e.message); }
-  }
+  draw();
+  if (!canContent) return;
+  try {
+    const qs = s => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const words = q.replace(/"/g, " ").split(/\s+/).filter(Boolean);
+    const qPhrase = "fullText contains '\"" + qs(q.replace(/"/g, "").trim()) + "\"' and trashed=false";
+    const qWords = words.map(w => "fullText contains '" + qs(w) + "'").join(" and ") + " and trashed=false";
+    const get = qq => drive("https://www.googleapis.com/drive/v3/files?pageSize=300&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true&q=" + encodeURIComponent(qq)).then(j => j.files || []).catch(() => []);
+    const [ph, wd] = await Promise.all([words.length > 1 ? get(qPhrase) : Promise.resolve([]), get(qWords)]);
+    const keyOf = id => items[id] ? id : items["dr-" + id] ? "dr-" + id : null;
+    const add = (list, pts) => list.forEach(x => { const k = keyOf(x.id); if (!k || !canList(items[k])) return; const r = res.get(k) || { f: items[k], sc: 0, why: "", content: 0, snip: "" }; r.content = Math.max(r.content, pts); res.set(k, r); });
+    add(ph, 60); add(wd, 25);
+    state = ""; draw();
+    // Đoạn trích nội dung cho các kết quả khớp nội dung đứng đầu
+    const top = [...res.values()].filter(r => r.content).sort((a, b) => (b.sc + b.content) - (a.sc + a.content)).slice(0, 10);
+    for (const r of top) { if (!location.hash.startsWith("#tim/") || $("#searchInput").value.trim() !== q) return; r.snip = makeSnippet(await fileTextForSnippet(r.f), P); if (r.snip) draw(); }
+  } catch (e) { state = "loi"; draw(); }
 }
+document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-srscope]"); if (!b) return; searchScope = b.dataset.srscope; const h = decodeURIComponent(location.hash.slice(1)); if (h.startsWith("tim/")) route(); });
 
 /* ---------- Đăng nhập ---------- */
 let loginTab = "code";
@@ -2816,31 +2901,136 @@ function contextText() {
   const lines = Object.values(items).filter(f => canSee(f)).slice(0, 700).map(f => "- [" + pathOf(f.parent).map(p => p.name).join(" > ") + "] " + f.name + (f.issuer ? "; ban hành bởi " + f.issuer : "") + (f.issued ? "; ngày " + fmtDate(f.issued) : "") + (f.number ? "; số " + f.number : "") + (f.effective ? "; hiệu lực từ " + fmtDate(f.effective) : "") + (f.status ? "; " + f.status : "") + (f.note ? "; ghi chú: " + f.note : ""));
   return lines.length ? lines.join("\n") : "(chưa có tài liệu nào trong phạm vi người dùng được xem)";
 }
-async function getChat() {
-  if (aiChat) return aiChat;
+/* ---------- Trợ lý AI dạng bảng bên — mở ở mọi màn hình (nút ✦ Hỏi AI), như Gemini trong Chrome ----------
+   Ngữ cảnh tự chọn: tài liệu / ghi chú đang mở (gửi kèm nội dung tệp cho Gemini), đoạn đang bôi đen, hoặc cả danh mục thư viện. */
+const AI_SYS = "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu) của một giảng viên luật. Trả lời bằng tiếng Việt, ngắn gọn, chính xác, có cấu trúc. Khi trả lời dựa vào tài liệu được gửi kèm, chỉ rõ điều, khoản, mục hoặc trang. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu không có thông tin, nói rõ và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản hay nội dung điều luật.";
+let aiCtxKey = null, aiSel = "", aiDocCache = {};
+function aiCurrentDoc() { const d = $("#dlgDoc"); return d && d.open && currentOpenDocId && items[currentOpenDocId] ? items[currentOpenDocId] : null; }
+function aiGrabSelection() {
+  const sel = window.getSelection ? String(window.getSelection()) : "";
+  if (sel && sel.trim().length > 1) aiSel = sel.trim().slice(0, 6000);
+}
+async function aiDocParts(f) {
+  const sheet = $("#inFileSheet");
+  if (!sheet && aiDocCache[f.id]) return aiDocCache[f.id];
+  let parts = null, note = "";
+  if (sheet) parts = [{ text: "NỘI DUNG GHI CHÚ “" + f.name + "”:\n" + (sheet.innerText || "").slice(0, 120000) }];
+  else if (driveIdOf(f) && canSee(f)) {
+    const m = f.fmime || f.mime || "", fmt = fmtOf(f);
+    try {
+      if (/google-apps\.(document|presentation)/.test(m) || /google-apps\.spreadsheet/.test(m)) {
+        const tk = await ensureDrive(), ex = /spreadsheet/.test(m) ? "text/csv" : "text/plain";
+        const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}/export?mimeType=${encodeURIComponent(ex)}`, { headers: { Authorization: "Bearer " + tk } });
+        if (r.ok) parts = [{ text: "NỘI DUNG TÀI LIỆU “" + f.name + "”:\n" + (await r.text()).slice(0, 150000) }];
+      } else if ((fmt === "pdf" || fmt === "image") && driveTok) {
+        if (f.size && f.size > 18 * 1024 * 1024) note = "Tệp lớn hơn 18 MB nên chỉ gửi thông tin mô tả.";
+        else {
+          const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}?alt=media&supportsAllDrives=true`, { headers: { Authorization: "Bearer " + driveTok } });
+          if (r.ok) {
+            const b = await r.blob();
+            const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]); fr.onerror = rej; fr.readAsDataURL(b); });
+            parts = [{ inlineData: { mimeType: fmt === "pdf" ? "application/pdf" : (b.type || "image/jpeg"), data: b64 } }, { text: "Trên đây là toàn văn tài liệu “" + f.name + "”." }];
+          }
+        }
+      } else if (!driveTok) note = "Chưa kết nối Google Drive trên máy này nên AI chỉ biết thông tin mô tả của tài liệu.";
+      else note = "Định dạng này (Word, PowerPoint tải từ máy…) AI chưa đọc trực tiếp được; chỉ gửi thông tin mô tả.";
+    } catch (e) { note = "Chưa đọc được nội dung tệp (" + e.message + "); chỉ gửi thông tin mô tả."; }
+  }
+  const meta = "Thông tin tài liệu: " + [f.name, f.number && "số " + f.number, f.issuer && "cơ quan ban hành " + f.issuer, f.issued && "ngày ban hành " + fmtDate(f.issued), f.effective && "hiệu lực từ " + fmtDate(f.effective), f.status, "thư mục " + pathOf(f.parent).map(p => p.name).join(" > ")].filter(Boolean).join("; ");
+  const out = { parts: [...(parts || []), { text: meta }], full: !!parts, note };
+  if (!sheet) aiDocCache[f.id] = out;
+  return out;
+}
+function aiRenderCtx() {
+  const f = aiCurrentDoc();
+  $("#aiCtx").innerHTML = (f ? `<span class="ai-chip-ctx">📄 Đang hỏi về: <b>${esc(f.name)}</b></span>` : `<span class="ai-chip-ctx">📚 Hỏi trên cả danh mục thư viện</span>`)
+    + (aiSel ? `<span class="ai-chip-ctx sel">✂ Đoạn đã chọn: “${esc(aiSel.slice(0, 80))}${aiSel.length > 80 ? "…" : ""}” <button type="button" data-aisel-clear title="Bỏ đoạn đã chọn">×</button></span>` : "");
+  const chips = f ? (aiSel ? ["Giải thích đoạn đã chọn", "Đoạn này căn cứ vào điều luật nào?", "Viết lại đoạn này ngắn gọn hơn"] : ["Tóm tắt tài liệu này", "Liệt kê các điều khoản, nội dung chính", "Soạn 5 câu hỏi ôn tập từ tài liệu này", "Tài liệu này còn hiệu lực không?"])
+    : ["Thư viện có văn bản nào về …", "Liệt kê các quy chế đang có", "Gợi ý tài liệu cho bài giảng về …"];
+  $("#aiChips").innerHTML = chips.map(c => `<button type="button" class="ai-chip" data-aichip="${esc(c)}">${esc(c)}</button>`).join("");
+}
+async function aiStartChat() {
+  const f = aiCurrentDoc(), key = f ? "doc:" + f.id : "lib";
+  if (aiChat && aiCtxKey === key) return aiChat;
   const { mod, ai } = await getAIInst();
-  const model = mod.getGenerativeModel(ai, { model: AI_MODELS[aiModelIdx], systemInstruction: "Bạn là trợ lý của thư viện số Phúc Nguyên Digital (tài liệu pháp luật, quy chế, chương trình đào tạo, giảng dạy, nghiên cứu). Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Khi câu hỏi liên quan tới tài liệu trong thư viện, chỉ ra tên tài liệu và thư mục chứa nó dựa trên danh mục được cung cấp. Nếu danh mục không có thông tin, nói rõ là thư viện chưa có và trả lời theo hiểu biết chung kèm lưu ý cần kiểm tra văn bản gốc còn hiệu lực. Không bịa số hiệu văn bản." });
-  aiChat = model.startChat({ history: [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }] });
+  const model = mod.getGenerativeModel(ai, { model: AI_MODELS[aiModelIdx], systemInstruction: AI_SYS });
+  let history;
+  if (f) {
+    const d = await aiDocParts(f);
+    if (d.note) aiAdd("sys", d.note);
+    history = [{ role: "user", parts: d.parts }, { role: "model", parts: [{ text: d.full ? "Đã đọc nội dung tài liệu. Mời bạn hỏi." : "Đã nhận thông tin mô tả tài liệu. Mời bạn hỏi." }] }];
+  } else history = [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }];
+  aiChat = model.startChat({ history }); aiCtxKey = key;
+  $("#aiModelTag").textContent = AI_MODELS[aiModelIdx];
   return aiChat;
 }
-function openAI() {
-  if (!$("#aiLog").children.length) aiAdd("bot", "Xin chào! Bạn muốn tìm tài liệu hay hỏi điều gì?");
-  $("#dlgAI").showModal(); setTimeout(() => $("#aiInput").focus(), 50);
+async function getChat() { return aiStartChat(); }
+function aiPlace() {
+  // Đặt bảng AI vào trong cửa sổ đang mở (tài liệu, ghi chú) để bấm được; không có thì nằm ở trang chính
+  const host = [...document.querySelectorAll("dialog[open]")].pop() || document.body, dock = $("#aiDock");
+  if (dock.parentElement !== host) host.appendChild(dock);
+  document.querySelectorAll(".ai-open").forEach(x => x.classList.remove("ai-open"));
+  if (!dock.hidden) (host === document.body ? document.body : host).classList.add("ai-open");
 }
+function openAI(q) {
+  aiGrabSelection();
+  const dock = $("#aiDock"), f = aiCurrentDoc(), key = f ? "doc:" + f.id : "lib";
+  if (aiCtxKey && aiCtxKey !== key) { aiChat = null; aiCtxKey = null; $("#aiLog").innerHTML = ""; }
+  dock.hidden = false; aiPlace(); aiRenderCtx();
+  if (!$("#aiLog").children.length) aiAdd("bot", f ? "Tôi đã sẵn sàng đọc “" + f.name + "”. Bôi đen một đoạn rồi bấm ✦ Hỏi AI nếu muốn hỏi riêng đoạn đó." : "Xin chào! Bạn muốn tìm tài liệu hay hỏi điều gì? Khi mở một tài liệu hoặc ghi chú, bấm ✦ Hỏi AI để hỏi trực tiếp về nội dung đó.");
+  if (typeof q === "string" && q) { $("#aiInput").value = q; $("#aiForm").requestSubmit(); }
+  else setTimeout(() => $("#aiInput").focus(), 50);
+}
+function closeAI() { $("#aiDock").hidden = true; aiPlace(); }
 async function askAI(e) {
   e.preventDefault(); const q = $("#aiInput").value.trim(); if (!q) return;
   $("#aiInput").value = ""; aiAdd("me", q); const bot = aiAdd("bot", "…");
+  const send = aiSel ? q + "\n\nĐOẠN ĐANG CHỌN:\n" + aiSel : q;
   try {
-    const chat = await getChat();
-    const r = await chat.sendMessageStream(q); let txt = "";
+    const chat = await aiStartChat();
+    const r = await chat.sendMessageStream(send); let txt = "";
     for await (const ch of r.stream) { txt += ch.text(); bot.textContent = txt; $("#aiLog").scrollTop = 1e9; }
     if (!txt) bot.textContent = "(Không có câu trả lời.)";
+    else aiActions(bot, txt);
   } catch (x) {
-    aiChat = null;
-    if (aiModelGone(x) && aiNextModel()) { bot.textContent = "…"; $("#aiInput").value = q; $("#aiLog").removeChild(bot); $("#aiLog").lastChild && $("#aiLog").removeChild($("#aiLog").lastChild); return askAI(e); }
+    aiChat = null; aiCtxKey = null;
+    if (aiModelGone(x) && aiNextModel()) { bot.remove(); $("#aiLog").lastChild && $("#aiLog").lastChild.remove(); $("#aiInput").value = q; return askAI(e); }
     bot.textContent = "Chưa hỏi được: " + (x.message || x);
   }
 }
+function aiActions(bot, txt) {
+  const bar = document.createElement("div"); bar.className = "ai-acts";
+  bar.innerHTML = `<button type="button" data-aicopy>⧉ Sao chép</button>` + ($("#inFileSheet") ? `<button type="button" data-aiinsert>↳ Chèn vào ghi chú</button>` : "") + `<button type="button" data-aigemini>Hỏi tiếp trên Gemini ↗</button>`;
+  bar._txt = txt; bot.after(bar); $("#aiLog").scrollTop = 1e9;
+}
+$("#aiFab").addEventListener("pointerdown", aiGrabSelection);
+$("#aiFab").onclick = () => $("#aiDock").hidden ? openAI() : closeAI();
+$("#aiClose").onclick = closeAI;
+$("#aiNew").onclick = () => { aiChat = null; aiCtxKey = null; aiSel = ""; $("#aiLog").innerHTML = ""; openAI(); };
+document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest("[data-askai]")) aiGrabSelection(); }, true);
+document.addEventListener("click", async e => {
+  const t = e.target.closest && e.target.closest("[data-askai],[data-aichip],[data-aisel-clear],[data-aicopy],[data-aiinsert],[data-aigemini]"); if (!t) return;
+  e.preventDefault();
+  if (t.hasAttribute("data-askai")) { $("#aiDock").hidden || aiCtxKey !== (aiCurrentDoc() ? "doc:" + aiCurrentDoc().id : "lib") ? openAI() : (aiGrabSelection(), aiRenderCtx()); }
+  else if (t.dataset.aichip) { const c = t.dataset.aichip; if (c.includes("…")) { $("#aiInput").value = c.replace("…", "").trim() + " "; $("#aiInput").focus(); } else { $("#aiInput").value = c; $("#aiForm").requestSubmit(); } }
+  else if (t.hasAttribute("data-aisel-clear")) { aiSel = ""; aiRenderCtx(); }
+  else if (t.hasAttribute("data-aicopy")) { try { await navigator.clipboard.writeText(t.parentElement._txt); toast("Đã sao chép.", "ok"); } catch (x) { toast("Chưa sao chép được.", "err"); } }
+  else if (t.hasAttribute("data-aiinsert")) {
+    const sheet = $("#inFileSheet"); if (!sheet) return;
+    const html = t.parentElement._txt.split(/\n{2,}/).map(p => "<p>" + esc(p).replace(/\n/g, "<br>") + "</p>").join("");
+    sheet.focus(); const sel = window.getSelection();
+    if (!sel.rangeCount || !sheet.contains(sel.anchorNode)) { const r = document.createRange(); r.selectNodeContents(sheet); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); }
+    document.execCommand("insertHTML", false, html); toast("Đã chèn vào ghi chú.", "ok");
+  }
+  else if (t.hasAttribute("data-aigemini")) {
+    const f = aiCurrentDoc(), log = [...$("#aiLog").querySelectorAll(".ai-msg.me")].pop();
+    const prompt = (f ? "Về tài liệu “" + f.name + "”: " : "") + (log ? log.textContent : "") + (aiSel ? "\n\nĐoạn: " + aiSel : "");
+    try { await navigator.clipboard.writeText(prompt); toast("Đã sao chép câu hỏi — dán (Ctrl+V) vào Gemini.", "ok"); } catch (x) {}
+    window.open("https://gemini.google.com/app", "_blank", "noopener");
+  }
+});
+// Đóng tài liệu / ghi chú: bảng AI quay về trang chính, ngữ cảnh đổi sang cả thư viện
+$("#dlgDoc").addEventListener("close", () => { aiSel = ""; if (!$("#aiDock").hidden) { aiChat = null; aiCtxKey = null; $("#aiLog").innerHTML = ""; setTimeout(() => openAI(), 0); } else aiPlace(); });
 
 /* ---------- Ghi âm → chữ trực tiếp trong văn bản ghi chú ---------- */
 // Bấm 🎤 Ghi âm: nói đến đâu chữ hiện vào văn bản đến đó (chữ xám = đang nghe). Chỉ dừng khi bấm ⏹ Dừng.
@@ -3396,7 +3586,7 @@ document.addEventListener("keydown", e => {
 });
 document.querySelectorAll("#dlgLogin .tab").forEach(b => b.onclick = () => setLoginTab(b.dataset.tab));
 $("#btnLogin").onclick = () => openLogin();
-$("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguyên Digital trên máy này?")) return; saveSession(null); saveTok(null); acct = null; aiChat = null; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
+$("#btnLogout").onclick = async () => { if (!await ask("Thoát khỏi Phúc Nguyên Digital trên máy này?")) return; saveSession(null); saveTok(null); acct = null; aiChat = null; aiCtxKey = null; aiDocCache = {}; $("#aiLog").innerHTML = ""; if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth); else { isAdmin = false; await afterAuth(); } toast("Đã thoát."); };
 $("#btnPw").onclick = async () => {
   const pw = await ask("Đặt mật khẩu mới cho tài khoản đang đăng nhập (ít nhất 6 ký tự).", { title: "ĐỔI MẬT KHẨU", input: "Mật khẩu mới", ok: "Đổi mật khẩu" });
   if (!pw) return;
@@ -3466,7 +3656,7 @@ document.addEventListener("drop", async e => {
     dragItem = null; return;
   }
   const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
-$("#btnAI").onclick = openAI;
+$("#btnAI").onclick = () => openAI();
 $("#btnRec").onclick = () => { if (dict && dict.meeting) toast("Đang ghi cuộc họp. Bấm “⏹ Dừng ghi cuộc họp” trong ghi chú để kết thúc.", "ok"); else openRec(); };
 $("#recStart").onclick = mtgStart;
 $("#recPause").onclick = recPause;
