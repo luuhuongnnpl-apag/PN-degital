@@ -640,16 +640,13 @@ body.ai-open .ai-fab{display:none}
   .ai-fab{right:12px;bottom:12px;padding:10px 15px}
 }
 
-/* ===== Điện thoại: đưa thanh đầu trang (logo, nút đăng nhập, tải lên…) xuống cuối trang, ẩn khối giới thiệu lớn ===== */
-@media (max-width:760px){
-  body{display:flex;flex-direction:column;min-height:100vh}
-  .layout{order:1;margin-top:10px}
-  header.top{order:2;margin-top:24px}
-  .hero{display:none}
-  .foot{order:3;margin-top:0}
-  .top-in{justify-content:center}
-  .top-act{flex-wrap:wrap;justify-content:center}
-}
+/* ===== Điện thoại: chỉ đưa các nút thao tác (ghi chú, tải lên, thư mục, tài khoản, đăng nhập/thoát) xuống cuối trang; logo và khối giới thiệu giữ nguyên ===== */
+.mob-acts:empty{display:none}
+.mob-acts{background:var(--navy-d);padding:14px 12px;margin-top:28px;border-top:2px solid var(--forest)}
+.mob-acts .top-act{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.mob-acts .whoami{display:block;width:100%;text-align:center;color:#cbd5e1;font-size:12.5px}
+.mob-acts + .foot{margin-top:0}
+.perm-off{display:none!important}
 
 /* ===== Tìm kiếm: phạm vi, xếp hạng, đoạn trích nội dung ===== */
 .sr-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
@@ -668,3 +665,10 @@ body.ai-open .ai-fab{display:none}
 .sr-badge.n{background:#e8f1fd;color:#1e40af}.sr-badge.c{background:#e7f6ec;color:#166534}.sr-badge.p{background:#f1f5f9;color:#475569}
 .sr-item mark{background:#fde68a;color:inherit;padding:0 1px;border-radius:2px}
 .sr-note{font-size:13px;color:var(--muted);margin:4px 0 12px}
+.ai-msg{overflow-wrap:anywhere}
+.mob-acts .whoami{max-width:none}
+.rl-table th.rl-col{min-width:118px;vertical-align:bottom}
+.rl-table .rl-name{width:100%;box-sizing:border-box;font:600 12.5px var(--sans);border:1px solid #cbd5e1;border-radius:4px;padding:4px 6px}
+.rl-table .rl-del{display:block;margin:4px auto 0;font-size:12px;color:var(--err)}
+.rl-table td.c input{width:17px;height:17px;cursor:pointer}
+.rl-table td.c input:disabled{cursor:not-allowed}

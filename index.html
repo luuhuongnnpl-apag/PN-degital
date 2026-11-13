@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./assets/pnd.css?v=20261113b">
+<link rel="stylesheet" href="./assets/pnd.css?v=20261113c">
 </head>
 <body>
 <header class="top">
@@ -19,9 +19,9 @@
       <span class="brand-name">PHÚC NGUYÊN DIGITAL</span>
     </a>
     <nav class="top-act" aria-label="Thao tác">
-      <button type="button" class="tbtn hl" id="btnNewNoteTop" data-newnote>📝 Tạo văn bản ghi chú</button>
-      <button type="button" class="tbtn hl up-only" id="btnUpload">＋ Tải tài liệu lên</button>
-      <button type="button" class="tbtn up-only" data-go="thu-muc">Thư mục</button>
+      <button type="button" class="tbtn hl" id="btnNewNoteTop" data-newnote data-perm="note">📝 Tạo văn bản ghi chú</button>
+      <button type="button" class="tbtn hl up-only" id="btnUpload" data-perm="up">＋ Tải tài liệu lên</button>
+      <button type="button" class="tbtn up-only" data-go="thu-muc" data-perm="folders">Thư mục</button>
       <button type="button" class="tbtn admin-only" data-go="tai-khoan">Tài khoản & phân quyền</button>
       <span id="whoami" class="whoami"></span>
       <button type="button" id="btnLogin" class="tbtn">Đăng nhập</button>
@@ -62,17 +62,17 @@
     </section>
     <section class="sbox">
       <h3 class="sbox-title">CÔNG CỤ</h3>
-      <button type="button" class="sbtn primary" id="btnAI">Hỏi trợ lý AI</button>
-      <button type="button" class="sbtn" id="btnRec" style="border-color:#b91c1c;color:#b91c1c">🎙 Ghi âm cuộc họp</button>
-      <button type="button" class="sbtn" data-newnote style="border-color:var(--forest);color:var(--forest)">📝 Tạo văn bản bằng ghi chú</button>
+      <button type="button" class="sbtn primary" id="btnAI" data-perm="ai">Hỏi trợ lý AI</button>
+      <button type="button" class="sbtn" id="btnRec" data-perm="rec" style="border-color:#b91c1c;color:#b91c1c">🎙 Ghi âm cuộc họp</button>
+      <button type="button" class="sbtn" data-newnote data-perm="note" style="border-color:var(--forest);color:var(--forest)">📝 Tạo văn bản bằng ghi chú</button>
       <button type="button" class="sbtn" id="btnPw" hidden>Đổi mật khẩu</button>
       <div class="up-only" id="adminTools">
-        <button type="button" class="sbtn" data-go="thu-muc">Quản lý thư mục</button>
+        <button type="button" class="sbtn" data-go="thu-muc" data-perm="folders">Quản lý thư mục</button>
         <button type="button" class="sbtn admin-only" data-go="tai-khoan">Tài khoản & phân quyền</button>
-        <button type="button" class="sbtn" id="btnScan">Quét Google Drive</button>
+        <button type="button" class="sbtn" id="btnScan" data-perm="kho">Quét Google Drive</button>
         <button type="button" class="sbtn" id="btnInit">Khởi tạo cây thư mục</button>
-        <button type="button" class="sbtn" id="btnShare">Mở chia sẻ xem tài liệu</button>
-        <button type="button" class="sbtn" id="btnThumbs">Tạo ảnh bìa từ trang đầu</button>
+        <button type="button" class="sbtn" id="btnShare" data-perm="kho">Mở chia sẻ xem tài liệu</button>
+        <button type="button" class="sbtn" id="btnThumbs" data-perm="kho">Tạo ảnh bìa từ trang đầu</button>
         <button type="button" class="sbtn admin-only" id="btnSource">Thêm nguồn Drive</button>
         <p class="muted" id="adminNote"></p>
       </div>
@@ -84,6 +84,7 @@
   </aside>
 </div>
 
+<div class="mob-acts" id="mobActs" aria-label="Thao tác"></div>
 <footer class="foot"><b>PHÚC NGUYÊN DIGITAL</b> • Không gian tri thức trong tầm tay · © Bản quyền: Phúc Nguyên</footer>
 
 <!-- Đăng nhập: tài khoản (tên đăng nhập / Google) hoặc mã truy cập dùng chung -->
@@ -157,7 +158,7 @@
 <!-- Chi tiết tài liệu -->
 <dialog id="dlgDoc" class="dlg xwide">
   <div class="dlg-in">
-    <div class="doc-head"><h3 id="docTitle"></h3><button type="button" class="btn sm ai-btn" data-askai title="Hỏi AI về tài liệu này">✦ Hỏi AI</button><button type="button" class="btn sm" id="docInfoBtn" title="Hiện / ẩn thông tin tài liệu">ⓘ Thông tin</button><a class="btn sm" id="docNewTab" target="_blank" rel="noopener" title="Mở tài liệu này ở thẻ mới của trình duyệt">↗ Mở thẻ mới</a><button type="button" class="x" data-close aria-label="Đóng">×</button></div>
+    <div class="doc-head"><h3 id="docTitle"></h3><button type="button" class="btn sm ai-btn" data-askai data-perm="ai" title="Hỏi AI về tài liệu này">✦ Hỏi AI</button><button type="button" class="btn sm" id="docInfoBtn" title="Hiện / ẩn thông tin tài liệu">ⓘ Thông tin</button><a class="btn sm" id="docNewTab" target="_blank" rel="noopener" title="Mở tài liệu này ở thẻ mới của trình duyệt">↗ Mở thẻ mới</a><button type="button" class="x" data-close aria-label="Đóng">×</button></div>
     <div class="doc-detail">
       <div class="doc-preview" id="docPreview"></div>
       <div class="doc-side"><dl class="doc-info" id="docInfo"></dl><div class="doc-acts" id="docActs"></div></div>
@@ -212,7 +213,7 @@
   <form id="aiForm" class="ai-form"><textarea id="aiInput" rows="2" placeholder="Hỏi về tài liệu đang mở, đoạn đang chọn hoặc cả thư viện…"></textarea><button class="btn primary" type="submit">Gửi</button></form>
   <p class="ai-foot">Gemini có thể sai — đối chiếu văn bản gốc. <a href="https://gemini.google.com/app" target="_blank" rel="noopener" id="aiGemini">Mở Gemini (tài khoản Pro) ↗</a></p>
 </aside>
-<button type="button" class="ai-fab" id="aiFab" title="Hỏi trợ lý AI">✦ Hỏi AI</button>
+<button type="button" class="ai-fab" id="aiFab" data-perm="ai" title="Hỏi trợ lý AI">✦ Hỏi AI</button>
 
 <!-- Ghi âm cuộc họp -->
 <dialog id="dlgRec" class="dlg wide">
@@ -284,6 +285,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async></script>
 <script src="./config.js?v=20261112b"></script>
-<script type="module" src="./assets/pnd.js?v=20261113b"></script>
+<script type="module" src="./assets/pnd.js?v=20261113c"></script>
 </body>
 </html>

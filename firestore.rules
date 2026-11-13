@@ -4,7 +4,7 @@
 // Khi sửa quy tắc: chỉ thay khối "===== PND - Phúc Nguyên Digital =====", không ghi đè cả tệp.
 rules_version = '2';
 // Quy tắc bảo mật Firestore — Phúc Nguyên Digital (phân quyền 10/11/2026)
-// Vai trò: xem | xem-rong | chuyen-muc | bien-muc | quan-tri  (tài khoản: pnd_accounts/{email}; mã dùng chung: pnd_ma/{mã})
+// Vai trò: xem | xem-rong | chuyen-muc | bien-muc | quan-tri | các loại tự thêm (pnd_settings/roles)  (tài khoản: pnd_accounts/{email}; mã dùng chung: pnd_ma/{mã})
 // Mức truy cập tài liệu (trường access): cong-khai | noi-bo | han-che | mat
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -26,11 +26,26 @@ service cloud.firestore {
     function codeData() { return get(/databases/$(database)/documents/pnd_ma/$(get(userPath()).data.code)).data; }
 
     function isAdmin() { return superAdmin() || (acctOk() && acct().role == 'quan-tri'); }
-    function isManager() { return isAdmin() || (acctOk() && acct().role == 'bien-muc'); }
+    // Phân quyền tùy chỉnh (13/11/2026): pnd_settings/roles { roles: { <loại>: { name, levels, perms{dl,up,edit,move,del,folders,kho,note,ai,rec} } } }
+    function rolesPath() { return /databases/$(database)/documents/pnd_settings/roles; }
+    function roleDef(role) { return exists(rolesPath()) ? get(rolesPath()).data.roles.get(role, null) : null; }
+    function levelsOld(role) {
+      return role == 'xem' ? ['cong-khai', 'noi-bo'] : ['cong-khai', 'noi-bo', 'han-che'];
+    }
     function levels(role) {
+      let d = roleDef(role);
       return role == 'quan-tri' ? ['cong-khai', 'noi-bo', 'han-che', 'mat']
-           : role == 'xem' ? ['cong-khai', 'noi-bo']
-           : ['cong-khai', 'noi-bo', 'han-che'];
+           : (d != null && d.get('levels', null) != null) ? d.levels.removeAll(['mat'])
+           : levelsOld(role);
+    }
+    function perm(role, p) {
+      let d = roleDef(role);
+      return role == 'quan-tri' || (d != null ? d.get('perms', {}).get(p, false) == true : role == 'bien-muc');
+    }
+    function can(p) { return isAdmin() || (acctOk() && perm(acct().role, p)); }
+    function isManager() {
+      return isAdmin() || (acctOk() && (perm(acct().role, 'up') || perm(acct().role, 'edit') || perm(acct().role, 'move')
+        || perm(acct().role, 'del') || perm(acct().role, 'folders') || perm(acct().role, 'kho')));
     }
     function grantAllows(g, d) {
       return okGrant(g) && d.get('access', 'noi-bo') in levels(g.get('role', 'chuyen-muc'))
@@ -44,14 +59,15 @@ service cloud.firestore {
     }
 
     // Cấu hình, cây thư mục: ai cũng đọc (tên thư mục), chỉ người quản lý được ghi
-    match /pnd_settings/{id} { allow read: if true; allow write: if isManager(); }
+    match /pnd_settings/{id} { allow read: if true; allow write: if id == 'roles' ? isAdmin() : isManager(); }
     match /pnd_tree/{id} { allow read: if true; allow write: if isManager(); }
 
     // Tài liệu: đọc theo mức truy cập + vai trò + danh mục
     match /pnd_items/{id} {
       allow read: if canRead(resource.data);
-      allow create, update: if isManager() && (request.resource.data.get('access', 'noi-bo') != 'mat' || isAdmin());
-      allow delete: if isManager();
+      allow create: if (can('up') || can('kho') || can('note')) && (request.resource.data.get('access', 'noi-bo') != 'mat' || isAdmin());
+      allow update: if isManager() && (request.resource.data.get('access', 'noi-bo') != 'mat' || isAdmin());
+      allow delete: if can('del');
     }
 
     // Danh mục công khai: ai cũng thấy tên, thông tin ban hành của tài liệu (trừ Mật); không có đường link

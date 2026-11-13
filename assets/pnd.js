@@ -119,14 +119,52 @@ const LEVELS = [
 ];
 const LV = Object.fromEntries(LEVELS.map(l => [l.key, l]));
 const L3 = ["cong-khai", "noi-bo", "han-che"];
-const ROLES = {
-  "xem":        { name: "Độc giả", desc: "Xem tài liệu Công khai và Nội bộ; không tải về", levels: ["cong-khai", "noi-bo"], dl: false, up: false },
-  "xem-rong":   { name: "Độc giả mở rộng", desc: "Xem mọi tài liệu (Công khai, Nội bộ, Hạn chế); không tải về", levels: L3, dl: false, up: false },
-  "chuyen-muc": { name: "Người dùng chuyên mục", desc: "Xem tài liệu (kể cả Hạn chế) trong các danh mục được chọn và được tải về", levels: L3, dl: true, up: false },
-  "bien-muc":   { name: "Thủ thư / Biên mục", desc: "Xem, tải về, tải lên; quản lý thư mục và tài liệu", levels: L3, dl: true, up: true },
-  "quan-tri":   { name: "Quản trị hệ thống", desc: "Toàn quyền: mọi tài liệu kể cả Mật, cấp tài khoản và phân quyền", levels: [...L3, "mat"], dl: true, up: true, admin: true }
+/* Phân quyền tùy chỉnh (13/11/2026): quản trị viên tự chọn mỗi loại tài khoản được xem mức nào và làm những việc gì.
+   Lưu ở pnd_settings/roles { roles: { <mã loại>: { name, levels: [...], perms: { dl, up, … } } } }; chưa lưu thì dùng mặc định dưới đây. */
+const PERMS = [
+  ["dl", "Tải tài liệu về máy"],
+  ["up", "Tải tài liệu lên"],
+  ["edit", "Sửa thông tin, đổi tên tài liệu"],
+  ["move", "Chuyển tài liệu sang thư mục khác"],
+  ["del", "Xóa tài liệu"],
+  ["folders", "Tạo, đổi tên, xóa, sắp xếp thư mục; ảnh bìa"],
+  ["kho", "Công cụ kho: quét Drive, mở chia sẻ, tạo ảnh bìa"],
+  ["note", "Tạo văn bản ghi chú"],
+  ["ai", "Hỏi trợ lý AI"],
+  ["rec", "Ghi âm cuộc họp"]
+];
+const MANAGE_PERMS = ["up", "edit", "move", "del", "folders", "kho"];
+const P_ALL = Object.fromEntries(PERMS.map(([k]) => [k, true]));
+const P_READ = { note: true, ai: true, rec: true };
+const ROLES_DEFAULT = {
+  "xem":        { name: "Độc giả", levels: ["cong-khai", "noi-bo"], perms: { ...P_READ } },
+  "xem-rong":   { name: "Độc giả mở rộng", levels: L3, perms: { ...P_READ } },
+  "chuyen-muc": { name: "Người dùng chuyên mục", levels: L3, perms: { ...P_READ, dl: true } },
+  "bien-muc":   { name: "Thủ thư / Biên mục", levels: L3, perms: { ...P_ALL } },
+  "quan-tri":   { name: "Quản trị hệ thống", levels: [...L3, "mat"], perms: { ...P_ALL }, admin: true, fixed: true }
 };
-const GUEST = { name: "Khách", desc: "Chưa đăng nhập: xem tài liệu Công khai", levels: ["cong-khai"], dl: false, up: false };
+const GUEST_DEFAULT = { name: "Khách (chưa đăng nhập)", levels: ["cong-khai"], perms: { ...P_READ }, guest: true };
+function roleDesc(r) {
+  const lv = (r.levels || []).map(k => LV[k] ? LV[k].name : k).join(", ");
+  const ps = PERMS.filter(([k]) => r.perms && r.perms[k]).map(([, l]) => l.toLowerCase());
+  return "Xem: " + (lv || "không") + (ps.length ? "; được: " + ps.join(", ") : "; chỉ xem") + (r.admin ? "; cấp tài khoản và phân quyền" : "");
+}
+function decorate(r) { r.dl = !!(r.perms && r.perms.dl); r.up = MANAGE_PERMS.some(k => r.perms && r.perms[k]); r.desc = roleDesc(r); return r; }
+let ROLES = {}, GUEST = null;
+function applyRoles(saved) {
+  const src = saved && saved.roles ? saved.roles : {};
+  ROLES = {};
+  const keys = [...Object.keys(ROLES_DEFAULT), ...Object.keys(src).filter(k => !ROLES_DEFAULT[k] && k !== "khach")];
+  for (const k of keys) {
+    const d = ROLES_DEFAULT[k] || {}, x = src[k] || {};
+    if (k === "quan-tri") { ROLES[k] = decorate({ ...ROLES_DEFAULT[k], name: x.name || d.name }); continue; }
+    ROLES[k] = decorate({ name: x.name || d.name || k, levels: Array.isArray(x.levels) ? x.levels.filter(l => l !== "mat" && LV[l]) : [...(d.levels || ["cong-khai"])], perms: { ...(x.perms || d.perms || {}) }, custom: !ROLES_DEFAULT[k] });
+  }
+  const g = src.khach || {};
+  GUEST = decorate({ ...GUEST_DEFAULT, perms: { ...(g.perms || GUEST_DEFAULT.perms) }, levels: ["cong-khai"] });
+  ["dl", ...MANAGE_PERMS].forEach(k => delete GUEST.perms[k]); decorate(GUEST);
+}
+applyRoles(null);
 const DEFAULT_LEVEL = "noi-bo";
 const grantOk = g => !!g && !g.disabled && (!g.han || g.han >= todayISO());
 function myGrant() {
@@ -136,8 +174,14 @@ function myGrant() {
   return null;
 }
 function myRole() { const g = myGrant(); return g ? (ROLES[g.role] || ROLES["chuyen-muc"]) : GUEST; }
-const canDl = () => myRole().dl;
-const canUp = () => myRole().up;
+/* can(quyền): quyền cụ thể theo loại tài khoản; canUp(): có ít nhất một quyền quản lý (cần kết nối Drive) */
+function can(p) { if (isAdmin) return true; const r = myRole(); return !!(r && r.perms && r.perms[p]); }
+const canDl = () => can("dl");
+const canUp = () => isAdmin || MANAGE_PERMS.some(can);
+function applyPerms() {
+  document.querySelectorAll("[data-perm]").forEach(el => el.classList.toggle("perm-off", !el.dataset.perm.split(" ").some(can)));
+  if (!can("ai") && $("#aiDock") && !$("#aiDock").hidden) closeAI();
+}
 function canCat(key) {
   if (isAdmin) return true;
   if (CAT[key] && CAT[key].adminOnly) return false;
@@ -261,7 +305,7 @@ async function makeThumb(f, localFile) {
 let thumbBusy = false;
 /* Tự chạy ngầm khi người quản lý đã có phiên Drive; bấm nút “Tạo ảnh trang đầu” để chạy cho cả kho (kể cả tệp từng lỗi) */
 async function thumbQueue(manual) {
-  if (thumbBusy || !canUp() || !settings || (!driveTok && !manual)) return;
+  if (thumbBusy || !can("kho") || !settings || (!driveTok && !manual)) return;
   const list = Object.values(items).filter(f => thumbable(f) && !f.thumbUrl && !f.coverUrl && (manual || !f.thumbTry) && (isAdmin || canSee(f)));
   if (!list.length) { if (manual) toast("Mọi tài liệu PDF, Google Docs và ảnh đã có ảnh trang đầu."); return; }
   thumbBusy = true; const max = manual ? list.length : Math.min(list.length, 40);
@@ -283,6 +327,7 @@ async function loadSettings() {
   try { const s = await getDoc(doc(db, "pnd_settings", "root")); settings = s.exists() ? s.data() : null; } catch (e) { settings = null; }
   applyCatDefs();
   try { const s = await getDoc(doc(db, "pnd_settings", "thongdung")); thongDung = s.exists() ? (s.data().items || []) : []; } catch (e) { thongDung = []; }
+  try { const s = await getDoc(doc(db, "pnd_settings", "roles")); applyRoles(s.exists() ? s.data() : null); } catch (e) { applyRoles(null); }
 }
 async function loadTree() {
   try { const snap = await getDocs(collection(db, "pnd_tree")); tree = {}; snap.forEach(d => tree[d.id] = d.data()); } catch (e) { console.warn("tree", e); }
@@ -453,6 +498,7 @@ function renderSide() {
 function renderAuth() {
   document.body.classList.toggle("is-admin", isAdmin);
   document.body.classList.toggle("can-up", canUp());
+  applyPerms();
   const g = myGrant(), r = myRole();
   const who = isAdmin ? (acct && acct.name ? acct.name : user && user.email || "Quản trị") : acct && grantOk(acct) ? (acct.name || acct.username) : session ? "Mã " + session.code : "";
   $("#whoami").textContent = who ? who + " · " + r.name : "";
@@ -519,16 +565,16 @@ function requireAccess(key) {
   return false;
 }
 function folderTools(id) {
-  return canUp() && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
+  return can("folders") && tree[id] && tree[id].depth >= 2 ? `<span class="ftools"><button type="button" title="Thêm/đổi ảnh bìa" data-fimg="${esc(id)}">▧</button><button type="button" title="Đổi tên" data-fren="${esc(id)}">✎</button><button type="button" title="Xóa thư mục" data-fdel="${esc(id)}">🗑</button></span>` : "";
 }
 function cardHTML(n, cat) {
   const cnt = null;
   const y = yearOf(n.name);
   const real = tree[n.id] && tree[n.id].name === n.name;
-  return `<div class="card-wrap" draggable="${canUp() ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}</span></button>${real ? folderTools(n.id) : ""}</div>`;
+  return `<div class="card-wrap" draggable="${can("folders") ? "true" : "false"}" data-sort-kind="folder" data-sort-id="${esc(n.id)}" data-sort-parent="${esc(n.parent || "")}"><button type="button" class="card" data-folder="${esc(n.id)}"><span class="cv">${n.imageUrl ? `<img src="${esc(n.imageUrl)}" alt="Ảnh ${esc(n.name)}" loading="lazy" referrerpolicy="no-referrer">` : cover(cat.icon, cat.color, y ? String(y) : "")}</span><span class="nm">${esc(n.name)}</span></button>${real ? folderTools(n.id) : ""}</div>`;
 }
-const upBtn = parent => canUp() ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
-const addBtn = (parent, label) => canUp() ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
+const upBtn = parent => can("up") ? `<button type="button" class="add-folder up" data-upload="${esc(parent)}">⤒ Tải tài liệu lên</button>` : "";
+const addBtn = (parent, label) => can("folders") ? `<button type="button" class="add-folder" data-fnew="${esc(parent)}">＋ ${esc(label)}</button>` : "";
 function noteCreateBoxHTML(folderId, catKey) {
   const isNoteCat = catKey === "bst-ghi-chu";
   return `<div class="note-create-box" id="noteCreateBox"${isNoteCat ? "" : " hidden"}>
@@ -576,21 +622,21 @@ function renderFolder(id, isCatRoot) {
       const gk = sortFolders(childrenOf(g.id));
       const own = filesOf(g.id).length;
       const cards = gk.map(n => cardHTML(n, cat)).join("") + (own ? cardHTML({ id: g.id, name: "Tài liệu chung" }, cat) : "");
-      return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || canUp() ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
-    }).join("") + (canUp() ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
-  } else if (kids.length || canUp()) {
+      return `<div class="grp-head"><div class="grp-title">${esc(g.name)}</div>${folderTools(g.id)}</div>${cards || can("folders") ? `<div class="cards">${cards}${addBtn(g.id, "Thư mục mới")}</div>` : `<p class="muted">Chưa có tài liệu.</p>`}`;
+    }).join("") + (can("folders") ? `<div style="margin-top:14px">${addBtn(id, "Nhóm mới")}</div>` : "");
+  } else if (kids.length || can("folders") || can("up")) {
     body = `<div class="cards">${kids.map(n => cardHTML(n, cat)).join("")}${addBtn(id, "Thư mục mới")}${node.depth >= 2 ? upBtn(id) : ""}</div>`;
   }
   const files = sortFiles(filesOf(id));
   if (files.length) body += (body ? `<div class="grp-title" style="margin-top:20px">Danh sách tài liệu</div>` : "") + tableHTML(files, false);
   if (!body) body = `<p class="empty">${loaded.items ? "Chưa có tài liệu trong mục này. Bấm “＋ Tạo file & Soạn thảo ngay” để tạo văn bản ghi chú mới." : "Đang tải danh mục…"}</p>`;
   const crumbs = `<div class="crumbs"><a class="home-link" data-home>${HOME_IC}Trang chủ</a>${path.map((p, i) => `<span class="sep">/</span>` + (i === path.length - 1 ? `<span>${esc(i === 0 ? cat.name : p.name)}</span>` : `<a data-folder="${esc(p.id)}">${esc(i === 0 ? cat.name : p.name)}</a>`)).join("")}</div>`;
-  const noteBtn = `<button type="button" class="hl" style="background:#b45309;border-color:#b45309" data-togglenote="${esc(id)}">📝 Tạo văn bản bằng ghi chú</button>`;
-  const tools = canUp() && node.depth <= 1
-    ? `<div class="page-tools">${noteBtn}<button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button></div>`
-    : canUp() && node.depth >= 2
-      ? `<div class="page-tools">${noteBtn}<button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên đây</button><button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button></div>`
-      : `<div class="page-tools">${noteBtn}</div>`;
+  const noteBtn = can("note") ? `<button type="button" class="hl" style="background:#b45309;border-color:#b45309" data-togglenote="${esc(id)}">📝 Tạo văn bản bằng ghi chú</button>` : "";
+  const upT = can("up") ? `<button type="button" class="hl" data-upload="${esc(id)}">⤒ Tải tài liệu lên${node.depth >= 2 ? " đây" : ""}</button>` : "";
+  const fT = can("folders");
+  const tools = node.depth <= 1
+    ? `<div class="page-tools">${noteBtn}${upT}${fT ? `<button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-go="thu-muc">Quản lý thư mục</button>` : ""}</div>`
+    : `<div class="page-tools">${noteBtn}${upT}${fT ? `<button type="button" data-flevel="${esc(id)}">🔒 Mức truy cập</button><button type="button" data-fren="${esc(id)}">✎ Đổi tên thư mục</button><button type="button" data-movefolder="${esc(id)}">⇄ Chuyển sang danh mục khác</button><button type="button" data-fdel="${esc(id)}">🗑 Xóa thư mục</button>` : ""}</div>`;
   $("#main").innerHTML = `<section class="box${canUp() ? " dropzone" : ""}" data-dropfolder="${esc(id)}"><h2 class="box-title">${esc(title)}${canUp() ? " " + lvChip(folderLevel(id), tree[id].access ? "" : " · kế thừa") : ""}</h2>${crumbs}${guestNote()}${tools}${noteCreateBoxHTML(id, cat.key)}${body}${canUp() ? '<p class="drop-hint">Mẹo: kéo thả tệp từ máy tính vào khung này để tải lên. Kéo một tài liệu hoặc thư mục thả vào giữa thẻ thư mục khác (hoặc vào tên thư mục ở cột trái) để chuyển vào đó; thả vào mép thẻ để đổi thứ tự.</p>' : ""}${navRow()}</section>`;
 }
 let imageTargetFolder = null, imageTargetCat = null;
@@ -600,7 +646,7 @@ function setCatImage(key) {
   openImageDlg("ẢNH BÌA BỘ SƯU TẬP: " + CAT[key].name.toUpperCase(), CAT[key].imageUrl || "");
 }
 function setFolderImage(id) {
-  if (!canUp() || !tree[id]) return;
+  if (!can("folders") || !tree[id]) return;
   imageTargetFolder = id; imageTargetCat = null;
   openImageDlg("ẢNH BÌA THƯ MỤC: " + String(tree[id].name || "").toUpperCase(), tree[id].imageUrl || "");
 }
@@ -680,7 +726,7 @@ function applyFilt(list) {
   else out = sortFiles(out);
   return out;
 }
-const sortAttrs = (f, noSort) => `draggable="${canUp() && !f.locked && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
+const sortAttrs = (f, noSort) => `draggable="${can("folders") && !f.locked && !noSort && !filt.sort ? "true" : "false"}" data-sort-kind="file" data-sort-id="${esc(f.id)}" data-sort-parent="${esc(f.parent || "")}"`;
 function metaLine(f) {
   const y = yearOfItem(f), p = [];
   if (f.number) p.push(`<span>${esc(f.number)}</span>`); else if (y) p.push(`<span>Năm ${y}</span>`);
@@ -689,8 +735,11 @@ function metaLine(f) {
 }
 function admBtns(f) {
   if (f.locked) return "";
-  if (!canUp() && !f.isLocalNote && !f.isNote) return "";
-  return `<div class="doc-adm">${canUp() ? `<button type="button" data-edit="${esc(f.id)}">Sửa</button><button type="button" data-move="${esc(f.id)}">Chuyển</button>` : `<button type="button" data-doc="${esc(f.id)}">Soạn thảo</button>`}<button type="button" data-del="${esc(f.id)}" title="Xóa file">Xóa</button></div>` +
+  const own = !canUp() && (f.isLocalNote || f.isNote);
+  const b = (can("edit") ? `<button type="button" data-edit="${esc(f.id)}">Sửa</button>` : "") + (can("move") ? `<button type="button" data-move="${esc(f.id)}">Chuyển</button>` : "")
+    + (own ? `<button type="button" data-doc="${esc(f.id)}">Soạn thảo</button>` : "") + (can("del") || own ? `<button type="button" data-del="${esc(f.id)}" title="Xóa file">Xóa</button>` : "");
+  if (!b) return "";
+  return `<div class="doc-adm">${b}</div>` +
     (canUp() && driveIdOf(f) && f.shared === false ? '<div class="sh-warn">Chưa mở chia sẻ xem</div>' : "");
 }
 function docCardHTML(f, noSort) {
@@ -1460,8 +1509,8 @@ function exportNoteFile(id, kind, scope) {
 
 async function deleteDocItem(id) {
   const f = items[id]; if (!f) return;
-  if (!canUp() && !f.isLocalNote && !f.isNote) {
-    openLogin("Xóa tài liệu cần tài khoản Thủ thư / Biên mục hoặc Quản trị.");
+  if (!can("del") && !(!canUp() && (f.isLocalNote || f.isNote))) {
+    openLogin("Loại tài khoản của bạn chưa được quyền xóa tài liệu.");
     return;
   }
   const did = driveIdOf(f);
@@ -1560,8 +1609,9 @@ function openDoc(id, forceMode) {
   if (f.link && /^https?:\/\//.test(f.link) && (!did || canDl())) acts.push(`<a class="btn" href="${esc(f.link)}" target="_blank" rel="noopener">${did ? "Mở trên Google Drive" : "Mở liên kết"}</a>`);
   if (did && !canDl()) acts.push(`<p class="muted" style="margin:0">Quyền của bạn: chỉ xem trực tuyến, không tải về.</p>`);
   if (did && canDl() && !/google-apps/.test(f.fmime || f.mime)) acts.push(`<a class="btn" href="https://drive.google.com/uc?export=download&id=${encodeURIComponent(did)}" target="_blank" rel="noopener">Tải về máy</a>`);
-  if (canUp()) acts.push(`<button type="button" class="btn" data-edit="${esc(f.id)}">Sửa thông tin</button>`, `<button type="button" class="btn" data-move="${esc(f.id)}">Chuyển thư mục</button>`);
-  if (canUp() || f.isLocalNote || f.isNote) acts.push(`<button type="button" class="btn danger" data-del="${esc(f.id)}">🗑 Xóa file</button>`);
+  if (can("edit")) acts.push(`<button type="button" class="btn" data-edit="${esc(f.id)}">Sửa thông tin</button>`);
+  if (can("move")) acts.push(`<button type="button" class="btn" data-move="${esc(f.id)}">Chuyển thư mục</button>`);
+  if (can("del") || (!canUp() && (f.isLocalNote || f.isNote))) acts.push(`<button type="button" class="btn danger" data-del="${esc(f.id)}">🗑 Xóa file</button>`);
   $("#docActs").innerHTML = acts.join("");
   if (!$("#dlgDoc").open) $("#dlgDoc").showModal();
   if (!$("#aiDock").hidden) setTimeout(() => openAI(), 0);
@@ -2198,7 +2248,7 @@ $("#mvNew").onclick = async () => {
   } catch (x) { $("#mvErr").textContent = "Chưa tạo được thư mục: " + x.message; }
 };
 async function moveTo(id, isFolder) {
-  const cur = isFolder ? tree[id] : items[id]; if (!cur) return;
+  const cur = isFolder ? tree[id] : items[id]; if (!cur || !can(isFolder ? "folders" : "move")) return;
   const target = await pickFolder(id, isFolder);
   if (!target || target === cur.parent) return;
   if (await doMove(id, isFolder, target)) go("f/" + encodeURIComponent(target));
@@ -2348,7 +2398,7 @@ function addUpFiles(list) {
 }
 
 function openUpload(folderId, files) {
-  if (!canUp()) { openLogin("Tải tài liệu lên cần tài khoản Thủ thư / Biên mục hoặc Quản trị."); return; }
+  if (!can("up")) { openLogin("Loại tài khoản của bạn chưa được quyền tải tài liệu lên."); return; }
   if (!settings) { toast("Chưa có cây thư mục. Quản trị viên bấm “Khởi tạo cây thư mục” trước.", "err"); return; }
   $("#upForm").reset(); $("#upErr").textContent = ""; $("#upMsg").textContent = ""; $("#upAuto").textContent = ""; upFilesSel = []; upCover.reset(); upLevelTouched = false; upAutoFrom = null;
   $("#upMore").open = false;
@@ -2458,7 +2508,7 @@ async function renameOnDrive(f, name) {
 }
 let editing = null;
 function openEdit(id) {
-  const f = items[id]; if (!f) return; editing = id;
+  const f = items[id]; if (!f || !can("edit")) return; editing = id;
   $("#edName").value = f.name || ""; $("#edIssuer").value = f.issuer || ""; $("#edNumber").value = f.number || ""; $("#edIssued").value = f.issued || ""; $("#edEffective").value = f.effective || ""; $("#edStatus").value = f.status || ""; $("#edNote").value = f.note || ""; $("#edStar").checked = !!f.star; $("#edErr").textContent = ""; $("#edMsg").textContent = "";
   $("#edAccess").innerHTML = LEVELS.filter(l => isAdmin || l.key !== "mat" || levelOf(f) === "mat").map(l => `<option value="${l.key}"${l.key === levelOf(f) ? " selected" : ""}>${esc(l.name)} — ${esc(l.desc)}</option>`).join("");
   edCover.reset(f.coverUrl || ""); $("#edCoverClear").hidden = !f.coverUrl;
@@ -2503,11 +2553,73 @@ function bindCats(cls, allId) {
   };
 }
 const catsText = cs => !cs || cs.includes("*") ? "Tất cả" : cs.map(k => CAT[k] ? CAT[k].name : k).join(", ");
+/* Bảng phân quyền chỉnh được: mỗi cột một loại tài khoản, mỗi dòng một quyền */
 function matrixHTML() {
-  const rows = [["Khách (chưa đăng nhập)", GUEST], ...Object.values(ROLES).map(r => [r.name, r])];
-  return `<div class="tbl-wrap"><table class="adm-table matrix"><thead><tr><th>Vai trò</th>${LEVELS.map(l => `<th>${lvChip(l.key)}</th>`).join("")}<th>Tải về</th><th>Tải lên, quản lý</th></tr></thead><tbody>
-    ${rows.map(([n, r]) => `<tr><td><b>${esc(n)}</b><br><span class="muted">${esc(r.desc)}</span></td>${LEVELS.map(l => `<td class="c">${r.levels.includes(l.key) ? "✓" : "—"}</td>`).join("")}<td class="c">${r.dl ? "✓" : "—"}</td><td class="c">${r.up ? "✓" : "—"}</td></tr>`).join("")}
-  </tbody></table></div><p class="muted">Mỗi tài khoản hoặc mã còn có thể giới hạn theo danh mục. Mức truy cập đặt cho từng tài liệu, hoặc đặt cho thư mục để áp dụng chung (trang <a data-go="thu-muc" href="#thu-muc">Quản lý thư mục</a>).</p>`;
+  const cols = [["khach", GUEST], ...Object.entries(ROLES)];
+  const head = cols.map(([k, r]) => `<th class="rl-col">${k === "quan-tri" || k === "khach" ? `<b>${esc(r.name)}</b>` : `<input class="rl-name" data-rk="${esc(k)}" value="${esc(r.name)}" maxlength="40" title="Tên loại tài khoản">`}${r.custom ? `<button type="button" class="linkish rl-del" data-rldel="${esc(k)}" title="Xóa loại tài khoản này">Xóa</button>` : ""}</th>`).join("");
+  const cell = (k, r, kind, key) => {
+    const fixed = k === "quan-tri" || (k === "khach" && (kind === "lv" || ["dl", ...MANAGE_PERMS].includes(key))) || (kind === "lv" && key === "mat");
+    const on = kind === "lv" ? (r.levels || []).includes(key) : !!(r.perms && r.perms[key]);
+    return `<td class="c"><input type="checkbox" data-rk="${esc(k)}" data-${kind}="${esc(key)}"${on ? " checked" : ""}${fixed ? " disabled" : ""}></td>`;
+  };
+  const rows = LEVELS.map(l => `<tr><td>Xem tài liệu mức ${lvChip(l.key)}</td>${cols.map(([k, r]) => cell(k, r, "lv", l.key)).join("")}</tr>`).join("")
+    + PERMS.map(([pk, pl]) => `<tr><td>${esc(pl)}</td>${cols.map(([k, r]) => cell(k, r, "pm", pk)).join("")}</tr>`).join("")
+    + `<tr><td>Cấp tài khoản, mã truy cập và phân quyền</td>${cols.map(([k]) => `<td class="c">${k === "quan-tri" ? "✓" : "—"}</td>`).join("")}</tr>`;
+  return `<p class="muted" style="margin:6px 0 10px">Đánh dấu để chọn mỗi loại tài khoản được xem mức tài liệu nào và làm những việc gì, rồi bấm <b>Lưu phân quyền</b>. Áp dụng ngay cho mọi tài khoản và mã truy cập thuộc loại đó. Mức <b>Mật</b> và quyền cấp tài khoản chỉ dành cho Quản trị hệ thống; khách chưa đăng nhập chỉ xem tài liệu Công khai.</p>
+  <div class="tbl-wrap"><table class="adm-table matrix rl-table"><thead><tr><th>Quyền</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="dlg-act" style="justify-content:flex-start"><button type="button" class="btn" id="rlAdd">＋ Thêm loại tài khoản</button><span style="flex:1"></span><button type="button" class="btn" id="rlReset">Khôi phục mặc định</button><button type="button" class="btn primary" id="rlSave">Lưu phân quyền</button></div>
+  <p class="muted" id="rlMsg"></p>
+  <p class="muted">Mỗi tài khoản hoặc mã còn có thể giới hạn theo danh mục. Mức truy cập đặt cho từng tài liệu, hoặc cho thư mục để áp dụng chung (trang <a data-go="thu-muc" href="#thu-muc">Quản lý thư mục</a>).</p>`;
+}
+function rolesFromTable() {
+  const out = {};
+  const box = $(".rl-table");
+  const keys = ["khach", ...Object.keys(ROLES)];
+  for (const k of keys) {
+    const r = k === "khach" ? GUEST : ROLES[k];
+    const nameEl = box.querySelector(`.rl-name[data-rk="${CSS.escape(k)}"]`);
+    const levels = [...box.querySelectorAll(`input[data-rk="${CSS.escape(k)}"][data-lv]`)].filter(x => x.checked).map(x => x.dataset.lv);
+    const perms = {}; box.querySelectorAll(`input[data-rk="${CSS.escape(k)}"][data-pm]`).forEach(x => { if (x.checked) perms[x.dataset.pm] = true; });
+    out[k] = { name: (nameEl ? nameEl.value.trim() : r.name) || r.name, levels: k === "quan-tri" ? [...L3, "mat"] : levels, perms: k === "quan-tri" ? { ...P_ALL } : perms };
+  }
+  return out;
+}
+async function saveRoles(roles, msg) {
+  await setDoc(doc(db, "pnd_settings", "roles"), { roles, updated: new Date().toISOString() });
+  applyRoles({ roles }); renderAuth(); await logAct("ROLES_SAVE", msg || "");
+}
+function bindRoleEditor() {
+  const msg = t => { $("#rlMsg").textContent = t; };
+  $("#rlSave").onclick = async () => {
+    const roles = rolesFromTable();
+    for (const [k, r] of Object.entries(roles)) if (k !== "khach" && !r.levels.length) { msg("Loại “" + r.name + "” chưa được xem mức tài liệu nào — hãy chọn ít nhất một mức."); return; }
+    try { $("#rlSave").disabled = true; await saveRoles(roles, Object.keys(roles).join(",")); toast("Đã lưu phân quyền.", "ok"); renderAccounts(); }
+    catch (x) { msg("Chưa lưu được: " + x.message); } finally { const b = $("#rlSave"); if (b) b.disabled = false; }
+  };
+  $("#rlAdd").onclick = async () => {
+    const name = await ask("Tên loại tài khoản mới (ví dụ: Giảng viên bộ môn, Sinh viên lớp K12).", { title: "THÊM LOẠI TÀI KHOẢN", input: "Tên loại tài khoản", ok: "Thêm" });
+    if (!name) return;
+    let key = fold(name).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "loai";
+    while (ROLES[key] || key === "khach") key += "-1";
+    const roles = rolesFromTable(); roles[key] = { name: name.trim(), levels: ["cong-khai", "noi-bo"], perms: { ...P_READ } };
+    try { await saveRoles(roles, "+" + key); toast("Đã thêm “" + name + "”. Đánh dấu quyền rồi bấm Lưu phân quyền.", "ok"); renderAccounts(); } catch (x) { msg("Chưa thêm được: " + x.message); }
+  };
+  $("#rlReset").onclick = async () => {
+    if (!await ask("Đưa các loại tài khoản có sẵn về quyền mặc định? Các loại tự thêm vẫn giữ nguyên.", { title: "KHÔI PHỤC MẶC ĐỊNH", ok: "Khôi phục" })) return;
+    const roles = rolesFromTable();
+    Object.entries(ROLES_DEFAULT).forEach(([k, d]) => { roles[k] = { name: d.name, levels: [...d.levels], perms: { ...d.perms } }; });
+    roles.khach = { name: GUEST_DEFAULT.name, levels: ["cong-khai"], perms: { ...GUEST_DEFAULT.perms } };
+    try { await saveRoles(roles, "reset"); toast("Đã khôi phục mặc định.", "ok"); renderAccounts(); } catch (x) { msg("Chưa lưu được: " + x.message); }
+  };
+  document.querySelectorAll("[data-rldel]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.rldel, r = ROLES[k];
+    let used = 0;
+    try { (await getDocs(collection(db, "pnd_accounts"))).forEach(d => { if (d.data().role === k) used++; }); (await getDocs(collection(db, "pnd_ma"))).forEach(d => { if (d.data().role === k) used++; }); } catch (e) {}
+    if (used) { msg("Còn " + used + " tài khoản/mã đang thuộc loại “" + r.name + "”. Hãy chuyển chúng sang loại khác trước khi xóa."); return; }
+    if (!await ask("Xóa loại tài khoản “" + r.name + "”?", { title: "XÓA LOẠI TÀI KHOẢN", ok: "Xóa" })) return;
+    const roles = rolesFromTable(); delete roles[k];
+    try { await saveRoles(roles, "-" + k); renderAccounts(); } catch (x) { msg("Chưa xóa được: " + x.message); }
+  });
 }
 async function renderAccounts() {
   if (!isAdmin) {
@@ -2516,7 +2628,7 @@ async function renderAccounts() {
   }
   $("#main").innerHTML = `<section class="box"><h2 class="box-title">TÀI KHOẢN & PHÂN QUYỀN</h2>
     <div class="crumbs"><a data-home>Trang chủ</a><span class="sep">/</span><span>Tài khoản & phân quyền</span></div>
-    <details class="panel-form" open><summary class="grp-title" style="margin:0;cursor:pointer">Bảng quyền theo vai trò</summary>${matrixHTML()}</details>
+    <details class="panel-form" open><summary class="grp-title" style="margin:0;cursor:pointer">Phân quyền theo loại tài khoản</summary>${matrixHTML()}</details>
 
     <h3 class="grp-title">Cấp tài khoản</h3>
     <form id="acForm" class="panel-form" novalidate>
@@ -2554,14 +2666,15 @@ async function renderAccounts() {
     <div class="tbl-wrap"><table class="adm-table"><thead><tr><th>Mã</th><th>Ghi chú</th><th>Vai trò</th><th>Danh mục</th><th>Hạn dùng</th><th>Đã dùng</th><th>Trạng thái</th><th></th></tr></thead><tbody id="maBody"><tr><td colspan="8" class="muted">Đang tải…</td></tr></tbody></table></div>
     ${navRow()}</section>`;
 
+  bindRoleEditor();
   /* --- Tài khoản cá nhân --- */
   const acCats = bindCats("acCat", "acAll");
   let AC_EDIT = null, AC = [];
   const showRole = () => {
     const r = $("#acRole").value, isGoogle = /@/.test($("#acUser").value) && !$("#acUser").value.trim().toLowerCase().endsWith("@" + ACCT_DOMAIN);
-    $("#acRoleDesc").textContent = ROLES[r].desc + ".";
+    $("#acRoleDesc").textContent = (ROLES[r] || ROLES.xem).desc + ".";
     $("#acCatsWrap").hidden = r === "quan-tri";
-    $("#acDriveWrap").hidden = !(ROLES[r].up && isGoogle && !AC_EDIT);
+    $("#acDriveWrap").hidden = !((ROLES[r] || {}).up && isGoogle && !AC_EDIT);
   };
   $("#acRole").onchange = showRole; $("#acUser").oninput = showRole; showRole();
   const acStop = () => { AC_EDIT = null; $("#acForm").reset(); $("#acUser").readOnly = false; acCats.set(["*"]); $("#acGo").textContent = "Cấp tài khoản"; $("#acCancel").hidden = true; $("#acPass").placeholder = "Ít nhất 6 ký tự"; showRole(); };
@@ -2666,7 +2779,7 @@ async function renderAccounts() {
     const code = norm($("#maCode").value), max = parseInt($("#maMax").value, 10), han = $("#maHan").value, note = $("#maNote").value.trim(), role = $("#maRole").value;
     const cats = maCats.get();
     if (!okCode(code)) { $("#maErr").textContent = "Mã gồm 3–24 ký tự: chữ không dấu, chữ số, gạch ngang hoặc gạch dưới."; return; }
-    if (role === "quan-tri" || role === "bien-muc") { $("#maErr").textContent = "Mã dùng chung không cấp quyền tải lên hay quản trị; hãy tạo tài khoản cá nhân cho vai trò này."; return; }
+    if (role === "quan-tri" || (ROLES[role] && ROLES[role].up)) { $("#maErr").textContent = "Mã dùng chung không cấp quyền tải lên hay quản trị; hãy tạo tài khoản cá nhân cho vai trò này."; return; }
     if (!(max >= 1 && max <= 1000)) { $("#maErr").textContent = "Số người từ 1 đến 1000."; return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(han) || han < todayISO()) { $("#maErr").textContent = "Chọn ngày hết hạn từ hôm nay trở đi."; return; }
     if (!cats.length) { $("#maErr").textContent = "Chọn ít nhất một danh mục."; return; }
@@ -2885,14 +2998,20 @@ async function getAIInst() {
 /* Chọn mẫu Gemini: dùng mẫu trong cấu hình; nếu Google đã ngừng mẫu đó thì tự chuyển sang mẫu dự phòng và nhớ lại */
 const AI_MODELS = [...new Set([CFG.AI_MODEL, "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"].filter(Boolean))];
 let aiModelIdx = (() => { try { const k = localStorage.getItem("pnd_ai_model"); const i = AI_MODELS.indexOf(k); return i >= 0 ? i : 0; } catch (e) { return 0; } })();
+const aiBusy = e => /\b(500|502|503|504|429)\b|high demand|overloaded|unavailable|try again later|resource.?exhausted|quota/i.test((e && e.message) || "");
 const aiModelGone = e => /\b404\b|no longer available|not found|not supported|deprecated|retired|unknown model|limit: 0\b/i.test((e && e.message) || "");
 function aiNextModel() { if (aiModelIdx >= AI_MODELS.length - 1) return false; aiModelIdx++; try { localStorage.setItem("pnd_ai_model", AI_MODELS[aiModelIdx]); } catch (e) {} return true; }
 function aiWrap(opts) {
   return { async generateContent(req) {
     const { mod, ai } = await getAIInst();
+    let busyTries = 0;
     for (;;) {
-      try { return await mod.getGenerativeModel(ai, { ...opts, model: AI_MODELS[aiModelIdx] }).generateContent(req); }
-      catch (e) { if (!aiModelGone(e) || !aiNextModel()) throw e; }
+      const m = AI_MODELS[(aiModelIdx + busyTries) % AI_MODELS.length];
+      try { return await mod.getGenerativeModel(ai, { ...opts, model: m }).generateContent(req); }
+      catch (e) {
+        if (aiBusy(e) && busyTries < AI_MODELS.length - 1) { busyTries++; await new Promise(r => setTimeout(r, 600)); continue; }
+        if (!aiModelGone(e) || !aiNextModel()) throw e;
+      }
     }
   } };
 }
@@ -2910,6 +3029,15 @@ function aiGrabSelection() {
   const sel = window.getSelection ? String(window.getSelection()) : "";
   if (sel && sel.trim().length > 1) aiSel = sel.trim().slice(0, 6000);
 }
+/* Lấy nội dung tệp Drive cho AI: người quản lý dùng phiên Drive (tự kết nối nếu cần); người khác đọc tệp đã mở chia sẻ bằng khóa công khai */
+async function aiDriveFetch(f, path) {
+  const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}${path}`;
+  let tk = driveTok;
+  if (!tk && canUp()) { try { tk = await ensureDrive(); } catch (e) { tk = null; } }
+  if (tk) { const r = await fetch(base, { headers: { Authorization: "Bearer " + tk } }); if (r.ok) return r; }
+  if (f.shared !== false && CFG.DRIVE_KEY) { const r = await fetch(base + (base.includes("?") ? "&" : "?") + "key=" + CFG.DRIVE_KEY); if (r.ok) return r; }
+  return null;
+}
 async function aiDocParts(f) {
   const sheet = $("#inFileSheet");
   if (!sheet && aiDocCache[f.id]) return aiDocCache[f.id];
@@ -2918,22 +3046,23 @@ async function aiDocParts(f) {
   else if (driveIdOf(f) && canSee(f)) {
     const m = f.fmime || f.mime || "", fmt = fmtOf(f);
     try {
-      if (/google-apps\.(document|presentation)/.test(m) || /google-apps\.spreadsheet/.test(m)) {
-        const tk = await ensureDrive(), ex = /spreadsheet/.test(m) ? "text/csv" : "text/plain";
-        const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}/export?mimeType=${encodeURIComponent(ex)}`, { headers: { Authorization: "Bearer " + tk } });
-        if (r.ok) parts = [{ text: "NỘI DUNG TÀI LIỆU “" + f.name + "”:\n" + (await r.text()).slice(0, 150000) }];
-      } else if ((fmt === "pdf" || fmt === "image") && driveTok) {
+      if (/google-apps\.(document|presentation|spreadsheet)/.test(m)) {
+        const ex = /spreadsheet/.test(m) ? "text/csv" : "text/plain";
+        const r = await aiDriveFetch(f, "/export?mimeType=" + encodeURIComponent(ex));
+        if (r) parts = [{ text: "NỘI DUNG TÀI LIỆU “" + f.name + "”:\n" + (await r.text()).slice(0, 150000) }];
+        else note = "Chưa đọc được nội dung tệp (cần kết nối Google Drive hoặc mở chia sẻ xem); chỉ gửi thông tin mô tả.";
+      } else if (fmt === "pdf" || fmt === "image") {
         if (f.size && f.size > 18 * 1024 * 1024) note = "Tệp lớn hơn 18 MB nên chỉ gửi thông tin mô tả.";
         else {
-          const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveIdOf(f))}?alt=media&supportsAllDrives=true`, { headers: { Authorization: "Bearer " + driveTok } });
-          if (r.ok) {
+          const r = await aiDriveFetch(f, "?alt=media&supportsAllDrives=true");
+          if (!r) note = "Chưa đọc được nội dung tệp (cần kết nối Google Drive hoặc mở chia sẻ xem); chỉ gửi thông tin mô tả.";
+          else {
             const b = await r.blob();
             const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]); fr.onerror = rej; fr.readAsDataURL(b); });
             parts = [{ inlineData: { mimeType: fmt === "pdf" ? "application/pdf" : (b.type || "image/jpeg"), data: b64 } }, { text: "Trên đây là toàn văn tài liệu “" + f.name + "”." }];
           }
         }
-      } else if (!driveTok) note = "Chưa kết nối Google Drive trên máy này nên AI chỉ biết thông tin mô tả của tài liệu.";
-      else note = "Định dạng này (Word, PowerPoint tải từ máy…) AI chưa đọc trực tiếp được; chỉ gửi thông tin mô tả.";
+      } else note = "Định dạng này (Word, PowerPoint tải từ máy…) AI chưa đọc trực tiếp được; chỉ gửi thông tin mô tả.";
     } catch (e) { note = "Chưa đọc được nội dung tệp (" + e.message + "); chỉ gửi thông tin mô tả."; }
   }
   const meta = "Thông tin tài liệu: " + [f.name, f.number && "số " + f.number, f.issuer && "cơ quan ban hành " + f.issuer, f.issued && "ngày ban hành " + fmtDate(f.issued), f.effective && "hiệu lực từ " + fmtDate(f.effective), f.status, "thư mục " + pathOf(f.parent).map(p => p.name).join(" > ")].filter(Boolean).join("; ");
@@ -2949,19 +3078,21 @@ function aiRenderCtx() {
     : ["Thư viện có văn bản nào về …", "Liệt kê các quy chế đang có", "Gợi ý tài liệu cho bài giảng về …"];
   $("#aiChips").innerHTML = chips.map(c => `<button type="button" class="ai-chip" data-aichip="${esc(c)}">${esc(c)}</button>`).join("");
 }
-async function aiStartChat() {
-  const f = aiCurrentDoc(), key = f ? "doc:" + f.id : "lib";
-  if (aiChat && aiCtxKey === key) return aiChat;
+let aiHist = null, aiHistModel = null;
+async function aiStartChat(modelName) {
+  const f = aiCurrentDoc(), key = f ? "doc:" + f.id : "lib", mName = modelName || AI_MODELS[aiModelIdx];
+  if (aiChat && aiCtxKey === key && aiHistModel === mName) return aiChat;
   const { mod, ai } = await getAIInst();
-  const model = mod.getGenerativeModel(ai, { model: AI_MODELS[aiModelIdx], systemInstruction: AI_SYS });
+  const model = mod.getGenerativeModel(ai, { model: mName, systemInstruction: AI_SYS });
+  if (aiChat && aiCtxKey === key && aiHist) { aiChat = model.startChat({ history: aiHist }); aiHistModel = mName; $("#aiModelTag").textContent = mName; return aiChat; }
   let history;
   if (f) {
     const d = await aiDocParts(f);
     if (d.note) aiAdd("sys", d.note);
     history = [{ role: "user", parts: d.parts }, { role: "model", parts: [{ text: d.full ? "Đã đọc nội dung tài liệu. Mời bạn hỏi." : "Đã nhận thông tin mô tả tài liệu. Mời bạn hỏi." }] }];
   } else history = [{ role: "user", parts: [{ text: "Danh mục tài liệu tôi được xem trong thư viện:\n" + contextText() }] }, { role: "model", parts: [{ text: "Đã nhận danh mục. Mời bạn đặt câu hỏi." }] }];
-  aiChat = model.startChat({ history }); aiCtxKey = key;
-  $("#aiModelTag").textContent = AI_MODELS[aiModelIdx];
+  aiHist = history; aiChat = model.startChat({ history }); aiCtxKey = key; aiHistModel = mName;
+  $("#aiModelTag").textContent = mName;
   return aiChat;
 }
 async function getChat() { return aiStartChat(); }
@@ -2974,6 +3105,7 @@ function aiPlace() {
 }
 function openAI(q) {
   aiGrabSelection();
+  if (aiCurrentDoc() && !driveTok && canUp()) ensureDrive().catch(() => {}); // kết nối Drive ngay trong lúc bấm để AI đọc được tệp chưa mở chia sẻ
   const dock = $("#aiDock"), f = aiCurrentDoc(), key = f ? "doc:" + f.id : "lib";
   if (aiCtxKey && aiCtxKey !== key) { aiChat = null; aiCtxKey = null; $("#aiLog").innerHTML = ""; }
   dock.hidden = false; aiPlace(); aiRenderCtx();
@@ -2984,18 +3116,29 @@ function openAI(q) {
 function closeAI() { $("#aiDock").hidden = true; aiPlace(); }
 async function askAI(e) {
   e.preventDefault(); const q = $("#aiInput").value.trim(); if (!q) return;
-  $("#aiInput").value = ""; aiAdd("me", q); const bot = aiAdd("bot", "…");
+  $("#aiInput").value = ""; aiAdd("me", q);
   const send = aiSel ? q + "\n\nĐOẠN ĐANG CHỌN:\n" + aiSel : q;
-  try {
-    const chat = await aiStartChat();
-    const r = await chat.sendMessageStream(send); let txt = "";
-    for await (const ch of r.stream) { txt += ch.text(); bot.textContent = txt; $("#aiLog").scrollTop = 1e9; }
-    if (!txt) bot.textContent = "(Không có câu trả lời.)";
-    else aiActions(bot, txt);
-  } catch (x) {
-    aiChat = null; aiCtxKey = null;
-    if (aiModelGone(x) && aiNextModel()) { bot.remove(); $("#aiLog").lastChild && $("#aiLog").lastChild.remove(); $("#aiInput").value = q; return askAI(e); }
-    bot.textContent = "Chưa hỏi được: " + (x.message || x);
+  const wait = aiAdd("sys", aiCurrentDoc() && !aiChat ? "Đang đọc tài liệu…" : "Đang trả lời…");
+  let bot = null;
+  // Thử lần lượt các mẫu Gemini khi mẫu đang dùng quá tải (lỗi 500/503 “high demand”) hoặc đã ngừng
+  for (let i = 0; i < AI_MODELS.length; i++) {
+    const mName = AI_MODELS[(aiModelIdx + i) % AI_MODELS.length];
+    try {
+      const chat = await aiStartChat(mName);
+      if (wait.isConnected) wait.remove();
+      bot = bot || aiAdd("bot", "…");
+      const r = await chat.sendMessageStream(send); let txt = "";
+      for await (const ch of r.stream) { txt += ch.text(); bot.textContent = txt; $("#aiLog").scrollTop = 1e9; }
+      if (!txt) bot.textContent = "(Không có câu trả lời.)";
+      else { aiHist = [...(aiHist || []), { role: "user", parts: [{ text: send }] }, { role: "model", parts: [{ text: txt }] }]; aiActions(bot, txt); }
+      return;
+    } catch (x) {
+      if ((aiBusy(x) || aiModelGone(x)) && i < AI_MODELS.length - 1) { if (aiModelGone(x)) aiNextModel(); if (bot) bot.textContent = "Mẫu " + mName + " đang quá tải, chuyển sang mẫu khác…"; await new Promise(r => setTimeout(r, 500)); continue; }
+      if (wait.isConnected) wait.remove();
+      bot = bot || aiAdd("bot", "");
+      bot.textContent = aiBusy(x) ? "Gemini đang quá tải ở mọi mẫu miễn phí. Sếp thử lại sau ít phút, hoặc bấm “Hỏi tiếp trên Gemini” để dùng tài khoản Gemini Pro." : "Chưa hỏi được: " + (x.message || x);
+      aiActions(bot, ""); return;
+    }
   }
 }
 function aiActions(bot, txt) {
@@ -3006,7 +3149,7 @@ function aiActions(bot, txt) {
 $("#aiFab").addEventListener("pointerdown", aiGrabSelection);
 $("#aiFab").onclick = () => $("#aiDock").hidden ? openAI() : closeAI();
 $("#aiClose").onclick = closeAI;
-$("#aiNew").onclick = () => { aiChat = null; aiCtxKey = null; aiSel = ""; $("#aiLog").innerHTML = ""; openAI(); };
+$("#aiNew").onclick = () => { aiChat = null; aiCtxKey = null; aiHist = null; aiSel = ""; $("#aiLog").innerHTML = ""; openAI(); };
 document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest("[data-askai]")) aiGrabSelection(); }, true);
 document.addEventListener("click", async e => {
   const t = e.target.closest && e.target.closest("[data-askai],[data-aichip],[data-aisel-clear],[data-aicopy],[data-aiinsert],[data-aigemini]"); if (!t) return;
@@ -3502,6 +3645,7 @@ document.addEventListener("click", e => {
   else if (t.dataset.edit) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); openEdit(t.dataset.edit); }
   else if (t.dataset.move) { if (t.closest("#dlgDoc")) $("#dlgDoc").close(); moveTo(t.dataset.move, false); }
   else if (t.dataset.del) { e.preventDefault(); deleteDocItem(t.dataset.del); }
+  else if (t.hasAttribute("data-newnote") && !can("note")) { toast("Loại tài khoản của bạn chưa được quyền tạo ghi chú.", "err"); }
   else if (t.hasAttribute("data-newnote")) {
     e.preventDefault();
     const h = decodeURIComponent(location.hash.slice(1)), cur = currentCatKey();
@@ -3622,7 +3766,7 @@ $("#loginForm").onsubmit = async e => {
 $("#searchForm").onsubmit = e => { e.preventDefault(); const q = $("#searchInput").value.trim(); if (q) go("tim/" + encodeURIComponent(q)); };
 $("#btnUpload").onclick = () => openUpload();
 // Kéo thả tệp vào khung thư mục đang mở → mở hộp tải lên với đúng thư mục
-document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!canUp() || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
+document.addEventListener("dragstart", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (!can("folders") || !row) return; dragItem = row.dataset; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.dataset.sortId); row.classList.add("is-dragging"); });
 document.addEventListener("dragend", e => { const row = e.target.closest && e.target.closest("[data-sort-id]"); if (row) row.classList.remove("is-dragging"); clearDropMarks(); dragItem = null; });
 document.addEventListener("dragover", e => {
   const dt = dropTarget(e);
@@ -3657,6 +3801,10 @@ document.addEventListener("drop", async e => {
   }
   const z = e.target.closest && e.target.closest(".dropzone"); if (!z || !e.dataTransfer.files.length || $("#dlgUpload").open) return; e.preventDefault(); z.classList.remove("drag"); openUpload(z.dataset.dropfolder, e.dataTransfer.files); });
 $("#btnAI").onclick = () => openAI();
+/* Điện thoại: chuyển nhóm nút thao tác ở đầu trang xuống cuối trang (trên chân trang) */
+const mqMob = window.matchMedia("(max-width:760px)");
+function placeTopActs() { const nav = document.querySelector(".top-act"), home = mqMob.matches ? $("#mobActs") : document.querySelector(".top-in"); if (nav && home && nav.parentElement !== home) home.appendChild(nav); }
+(mqMob.addEventListener ? mqMob.addEventListener("change", placeTopActs) : mqMob.addListener(placeTopActs)); placeTopActs();
 $("#btnRec").onclick = () => { if (dict && dict.meeting) toast("Đang ghi cuộc họp. Bấm “⏹ Dừng ghi cuộc họp” trong ghi chú để kết thúc.", "ok"); else openRec(); };
 $("#recStart").onclick = mtgStart;
 $("#recPause").onclick = recPause;
