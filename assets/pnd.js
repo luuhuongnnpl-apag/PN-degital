@@ -987,7 +987,23 @@ function inFileEditorHTML(f, hasOriginalView) {
       </div>
       <div class="rb-panel infile-toolbar" data-rpanel="insert" hidden>
         <div class="rb-grp"><div class="rb-row">
-          <button type="button" data-wins="table">⊞ Bảng</button>
+          <button type="button" data-wins="table" aria-expanded="false">⊞ Bảng</button>
+          <div class="w-table-menu" data-wtablemenu hidden>
+            <div class="w-table-grid">${Array.from({length: 64}, (_, i) => {
+              const rows = Math.floor(i / 8) + 1, cols = i % 8 + 1;
+              return `<button type="button" data-wgrid="${rows},${cols}" aria-label="${rows} hàng, ${cols} cột"></button>`;
+            }).join("")}</div>
+            <output data-wtablepreview>Chọn số hàng và cột</output>
+            <div class="rb-row">
+              <label>Hàng <input data-wrows type="number" min="1" max="50" value="3"></label>
+              <label>Cột <input data-wcols type="number" min="1" max="12" value="3"></label>
+              <button type="button" data-wgrid="custom">Chèn</button>
+            </div>
+            <div class="rb-row w-table-actions" hidden>
+              ${[["row-before","Thêm hàng trên"],["row-after","Thêm hàng dưới"],["col-before","Thêm cột trái"],["col-after","Thêm cột phải"],["row-delete","Xóa hàng"],["col-delete","Xóa cột"],["width","Độ rộng cột"]].map(([action,label]) =>
+                `<button type="button" data-wtableaction="${action}">${label}</button>`).join("")}
+            </div>
+          </div>
           <button type="button" data-wins="pagebreak" title="Phần sau bắt đầu ở trang mới (Ctrl+Enter)">⤓ Ngắt trang</button>
           <button type="button" data-wins="hr">― Đường kẻ</button>
           <button type="button" data-wins="link">🔗 Liên kết</button>
@@ -1235,17 +1251,163 @@ function wParaStyle(prop, val) {
   else bl.forEach(b => { b.style[prop] = val; });
   wChanged();
 }
+function wTableCell() {
+  const sel = wRestore(), node = sel?.anchorNode;
+  const cell = (node?.nodeType === 1 ? node : node?.parentElement)?.closest("td,th");
+  return cell && wSheet()?.contains(cell) ? cell : null;
+}
+function wTableMenu(open) {
+  const menu = $("[data-wtablemenu]");
+  if (!menu) return;
+  if (open) menu.querySelector(".w-table-actions").hidden = !wTableCell();
+  menu.hidden = !open;
+  $('[data-wins="table"]').setAttribute("aria-expanded", String(open));
+}
+function wSetColumnWidth(table, index, width) {
+  const first = table.rows[0];
+  if (table.style.tableLayout !== "fixed") {
+    const total = table.getBoundingClientRect().width;
+    for (const cell of first.cells) cell.style.width = cell.getBoundingClientRect().width / total * 100 + "%";
+    table.style.tableLayout = "fixed";
+  }
+  first.cells[index].style.width = width + "%";
+}
+async function wTableAction(action) {
+  const cell = wTableCell();
+  if (!cell) return;
+  const row = cell.parentElement, table = row.closest("table");
+  const rows = Array.from(table.rows), count = rows[0].cells.length, index = cell.cellIndex;
+  if (table.querySelector("colgroup") || rows.some(r => r.cells.length !== count ||
+      Array.from(r.cells).some(c => c.rowSpan !== 1 || c.colSpan !== 1))) {
+    toast("Bảng có cấu trúc đặc biệt. Hãy dùng một bảng không gộp ô để chỉnh hàng hoặc cột.");
+    return;
+  }
+  if (action === "width") {
+    const initial = Math.round(cell.getBoundingClientRect().width / table.getBoundingClientRect().width * 100);
+    const answer = await ask("Độ rộng cột tính theo phần trăm chiều rộng bảng (5–95).",
+      {title: "ĐỘ RỘNG CỘT", input: "Phần trăm", value: String(initial), ok: "Áp dụng"});
+    if (!answer || !wSheet()?.contains(cell)) return;
+    const width = Number(answer);
+    if (!Number.isFinite(width) || width < 5 || width > 95) {
+      toast("Nhập một số từ 5 đến 95.");
+      return;
+    }
+    if (count === 1) {
+      toast("Bảng một cột chiếm toàn bộ chiều rộng bảng.");
+      return;
+    }
+    const total = table.getBoundingClientRect().width;
+    const widths = Array.from(row.cells, c => c.getBoundingClientRect().width / total * 100);
+    widths.forEach((value, i) => {
+      wSetColumnWidth(table, i, i === index ? width : value * (100 - width) / (100 - widths[index]));
+    });
+  } else if (action === "row-delete" || action === "col-delete") {
+    if ((action === "row-delete" ? rows.length : count) === 1) {
+      toast("Bảng cần giữ ít nhất một hàng và một cột.");
+      return;
+    }
+    if (action === "row-delete") row.remove();
+    else rows.forEach(r => r.deleteCell(index));
+  } else if (action.startsWith("row-")) {
+    const added = table.insertRow(row.rowIndex + Number(action === "row-after"));
+    for (let j = 0; j < count; j++) added.insertCell().append(document.createElement("br"));
+  } else {
+    rows.forEach(r => r.insertCell(index + Number(action === "col-after")).append(document.createElement("br")));
+  }
+  wChanged();
+}
+document.addEventListener("click", e => {
+  const grid = e.target.closest?.("[data-wgrid]");
+  const action = e.target.closest?.("[data-wtableaction]");
+  const menu = $("[data-wtablemenu]");
+  if (!ed || !menu || menu.hidden) return;
+  if (grid) {
+    const [rows, cols] = grid.dataset.wgrid === "custom"
+      ? ["[data-wrows]", "[data-wcols]"].map(x => Number($(x).value))
+      : grid.dataset.wgrid.split(",").map(Number);
+    if (![rows, cols].every(Number.isInteger) || rows < 1 || rows > 50 || cols < 1 || cols > 12) {
+      toast("Nhập 1–50 hàng và 1–12 cột.");
+      return;
+    }
+    wTableMenu(false);
+    if (wTableCell()) {
+      toast("Đặt con trỏ ngoài bảng hiện tại để chèn bảng mới.");
+      return;
+    }
+    const row = "<tr>" + "<td><br></td>".repeat(cols) + "</tr>";
+    if (document.execCommand("insertHTML", false, "<table><tbody>" + row.repeat(rows) + "</tbody></table><p><br></p>")) wChanged();
+  } else if (action) {
+    wTableMenu(false);
+    void wTableAction(action.dataset.wtableaction);
+  } else if (!menu.contains(e.target) && !e.target.closest?.('[data-wins="table"]')) wTableMenu(false);
+});
+function wPreviewTableSize(e) {
+  const button = e.target.closest?.("[data-wgrid]:not([data-wgrid=custom])");
+  if (!button) return;
+  const [rows, cols] = button.dataset.wgrid.split(",").map(Number);
+  $("[data-wtablepreview]").textContent = rows + " hàng × " + cols + " cột";
+  button.parentElement.querySelectorAll("button").forEach((b, i) => {
+    b.classList.toggle("on", Math.floor(i / 8) < rows && i % 8 < cols);
+  });
+}
+document.addEventListener("pointerover", wPreviewTableSize);
+document.addEventListener("focusin", wPreviewTableSize);
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("[data-wtablemenu]:not([hidden])")) {
+    e.preventDefault();
+    wTableMenu(false);
+    $('[data-wins="table"]').focus();
+  }
+});
+function wColumnEdge(e) {
+  const cell = e.target.closest?.(".w-page td,.w-page th");
+  if (!cell) return;
+  const table = cell.closest("table"), index = cell.cellIndex;
+  if (index >= cell.parentElement.cells.length - 1 ||
+      Math.abs(e.clientX - cell.getBoundingClientRect().right) > 5) return;
+  const count = table.rows[0].cells.length;
+  if (table.querySelector("colgroup") || Array.from(table.rows).some(row => row.cells.length !== count ||
+      Array.from(row.cells).some(c => c.rowSpan !== 1 || c.colSpan !== 1))) return;
+  return cell;
+}
+document.addEventListener("pointermove", e => {
+  const sheet = wSheet();
+  if (sheet) sheet.classList.toggle("w-column-edge", !!wColumnEdge(e));
+});
+document.addEventListener("pointerdown", e => {
+  if (e.button !== 0 || e.pointerType !== "mouse") return;
+  const cell = wColumnEdge(e);
+  if (!cell) return;
+  e.preventDefault();
+  const table = cell.closest("table"), index = cell.cellIndex;
+  const total = table.getBoundingClientRect().width;
+  const left = cell.getBoundingClientRect().width / total * 100;
+  const right = cell.nextElementSibling.getBoundingClientRect().width / total * 100;
+  const minimum = Math.min(4, left, right);
+  const pointer = e.pointerId, start = e.clientX;
+  let changed = false;
+  cell.setPointerCapture(pointer);
+  const controller = new AbortController(), options = {signal: controller.signal};
+  cell.addEventListener("pointermove", move => {
+    const delta = Math.max(minimum - left, Math.min(right - minimum, (move.clientX - start) / total * 100));
+    if (!changed && Math.abs(move.clientX - start) < 2) return;
+    wSetColumnWidth(table, index, left + delta);
+    wSetColumnWidth(table, index + 1, right - delta);
+    changed = true;
+  }, options);
+  cell.addEventListener("lostpointercapture", () => {
+    controller.abort();
+    if (changed && wSheet()?.contains(table)) wChanged();
+  }, options);
+});
 async function wInsert(k) {
   const s = wSheet(); if (!s) return;
   if (k === "table") {
-    const v = await ask("Số hàng × số cột (VD: 3x4):", { title: "CHÈN BẢNG", input: "Hàng x Cột", value: "3x3", ok: "Chèn bảng" });
-    if (!v) return;
-    const m = v.match(/(\d+)\D+(\d+)/) || [0, 3, 3];
-    const rows = Math.min(50, Math.max(1, +m[1])), cols = Math.min(12, Math.max(1, +m[2]));
-    const cell = tag => "<" + tag + ">&nbsp;</" + tag + ">";
-    const html = `<table><tbody><tr>${cell("th").repeat(cols)}</tr>${("<tr>" + cell("td").repeat(cols) + "</tr>").repeat(Math.max(0, rows - 1))}</tbody></table><p><br></p>`;
-    wRestore(); document.execCommand("insertHTML", false, html);
-  } else if (k === "link") {
+    const menu = $("[data-wtablemenu]");
+    wTableMenu(menu.hidden);
+    return;
+  }
+  if (k === "link") {
     const url = await ask("Địa chỉ liên kết (https://…):", { title: "CHÈN LIÊN KẾT", input: "Địa chỉ", value: "https://", ok: "Chèn" });
     if (!url || url === "https://") return;
     const sel = wRestore();
