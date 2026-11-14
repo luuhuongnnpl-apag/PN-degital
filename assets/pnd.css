@@ -512,6 +512,9 @@ details.more .fld{margin-top:8px}
 .rb-row{display:flex;gap:3px;align-items:center;flex-wrap:wrap}
 .rb-lbl{font-size:10.5px;color:#6b7280;text-align:center;padding:1px 0 3px}
 .ribbon .infile-toolbar button,.ribbon button,.ribbon select{height:27px;padding:2px 7px;font-size:12.5px}
+.ribbon [data-wblock]{height:36px;white-space:nowrap}
+.ribbon [data-wblock^="H"]{font-weight:700;color:#234a75}
+.ribbon [data-wblock][aria-pressed="true"]{background:#e6eef9;border-color:#7294c3}
 .w-color{position:relative;display:inline-flex;align-items:center;justify-content:center;height:27px;min-width:30px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;font-weight:700;cursor:pointer;padding:0 6px}
 .w-color input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;border:0;padding:0}
 .w-body{flex:1;min-height:0;display:flex}

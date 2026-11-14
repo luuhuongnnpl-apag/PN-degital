@@ -940,6 +940,11 @@ function inFileEditorHTML(f, hasOriginalView) {
       </div>
       <div class="rb-panel infile-toolbar" data-rpanel="home">
         <div class="rb-grp"><div class="rb-row">
+          <button type="button" data-wpaste title="Dán văn bản (Ctrl+V để dán kèm định dạng)">Dán</button>
+          <button type="button" data-wcmd="cut" title="Cắt (Ctrl+X)">Cắt</button>
+          <button type="button" data-wcmd="copy" title="Sao chép (Ctrl+C)">Sao chép</button>
+        </div><span class="rb-lbl">Bảng tạm</span></div>
+        <div class="rb-grp"><div class="rb-row">
           <button type="button" data-wcmd="undo" title="Hoàn tác (Ctrl+Z)">↶</button>
           <button type="button" data-wcmd="redo" title="Làm lại (Ctrl+Y)">↷</button>
         </div><span class="rb-lbl">Hoàn tác</span></div>
@@ -972,7 +977,8 @@ function inFileEditorHTML(f, hasOriginalView) {
           <select data-wspace aria-label="Khoảng cách sau đoạn" title="Khoảng cách sau đoạn">${wOpts([["", "Cách đoạn"], ["0", "0 pt"], ["6", "6 pt"], ["12", "12 pt"]], "")}</select>
         </div><span class="rb-lbl">Đoạn văn</span></div>
         <div class="rb-grp"><div class="rb-row">
-          <select data-wblock aria-label="Kiểu đoạn" style="width:128px">${wOpts([["P", "Bình thường"], ["H1", "Tiêu đề 1"], ["H2", "Tiêu đề 2"], ["H3", "Tiêu đề 3"], ["BLOCKQUOTE", "Trích dẫn"]], "P")}</select>
+          ${[["P", "Bình thường"], ["H1", "Tiêu đề 1"], ["H2", "Tiêu đề 2"], ["H3", "Tiêu đề 3"], ["BLOCKQUOTE", "Trích dẫn"]].map(([tag, label]) =>
+            `<button type="button" data-wblock="${tag}" aria-pressed="${tag === "P"}">${label}</button>`).join("")}
         </div><span class="rb-lbl">Kiểu</span></div>
         <div class="rb-grp"><div class="rb-row">
           <button type="button" class="dict-btn" data-dictate title="Bấm để ghi âm, nói đến đâu chữ hiện vào văn bản đến đó (tại vị trí con trỏ). Bấm lần nữa để dừng.">🎤 Ghi âm</button>
@@ -1268,18 +1274,43 @@ document.addEventListener("selectionchange", () => {
   const pt = Math.round(parseFloat(cs.fontSize) * 0.75 * 2) / 2;
   const zs = $("[data-wsize]"); if (zs) { if (![...zs.options].some(o => +o.value === pt)) { zs.querySelectorAll("option.tmp").forEach(o => o.remove()); const o = new Option(String(pt), String(pt)); o.className = "tmp"; zs.add(o); } zs.value = String(pt); }
   const bk = n.closest && n.closest("h1,h2,h3,blockquote,p");
-  const bs = $("[data-wblock]"); if (bs) bs.value = bk && s.contains(bk) ? bk.tagName : "P";
+  const tag = bk && s.contains(bk) ? bk.tagName : "P";
+  document.querySelectorAll("#inFileWrap button[data-wblock]").forEach(button => {
+    button.setAttribute("aria-pressed", String(button.dataset.wblock === tag));
+  });
 });
 // Nút ribbon không lấy mất vùng chọn trong trang
 document.addEventListener("mousedown", e => {
   if (e.target.closest && e.target.closest(".ribbon button, .w-status button")) e.preventDefault();
 });
+async function wPaste() {
+  const editor = ed, sheet = wSheet();
+  const sel = wRestore();
+  if (!sel || !sel.rangeCount || !sheet.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+  const range = sel.getRangeAt(0).cloneRange();
+  let value;
+  try {
+    value = await navigator.clipboard.readText();
+  } catch {
+    toast("Nhấn Ctrl+V (hoặc ⌘+V) để dán vào tài liệu.");
+    return;
+  }
+  if (!value || ed !== editor || wSheet() !== sheet || !sheet.contains(range.commonAncestorContainer)) return;
+  sheet.focus();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  if (document.execCommand("insertText", false, value)) wChanged();
+}
 document.addEventListener("click", e => {
-  const t = e.target.closest && e.target.closest("[data-wcmd],[data-wins],[data-wrtab],[data-wpane],[data-wtabgo],[data-wtabadd],[data-wtabren],[data-wtabup],[data-wtabdown],[data-wtabdel],[data-wzoom],[data-wtransfer],[data-winfo],[data-wexporttab],[data-wfirst]");
+  const t = e.target.closest && e.target.closest("[data-wpaste],button[data-wblock],[data-wcmd],[data-wins],[data-wrtab],[data-wpane],[data-wtabgo],[data-wtabadd],[data-wtabren],[data-wtabup],[data-wtabdown],[data-wtabdel],[data-wzoom],[data-wtransfer],[data-winfo],[data-wexporttab],[data-wfirst]");
   if (!t || !ed) return;
   e.preventDefault();
   const d = t.dataset;
-  if (d.wcmd) { const sel = wRestore(); if (sel) { document.execCommand("styleWithCSS", false, false); document.execCommand(d.wcmd, false, null); wChanged(); } }
+  if (d.wcmd) { const sel = wRestore(); if (sel) { document.execCommand("styleWithCSS", false, false); if (document.execCommand(d.wcmd, false, null) && d.wcmd !== "copy") wChanged(); } }
+  else if ("wpaste" in d) void wPaste();
+  else if (d.wblock) {
+    if (wRestore() && document.execCommand("formatBlock", false, d.wblock)) wChanged();
+  }
   else if (d.wins) wInsert(d.wins);
   else if (t.hasAttribute("data-wfirst")) wParaStyle("textIndent");
   else if (d.wrtab) {
@@ -1309,7 +1340,6 @@ document.addEventListener("change", e => {
   else if ("wsize" in d) wFontSize(+t.value);
   else if ("wcolor" in d) wColor("fore", t.value);
   else if ("whilite" in d) wColor("hilite", t.value);
-  else if ("wblock" in d) { wRestore(); document.execCommand("formatBlock", false, t.value); wChanged(); }
   else if ("wline" in d) { if (t.value) wParaStyle("lineHeight", t.value); t.value = ""; }
   else if ("wspace" in d) { if (t.value !== "") wParaStyle("marginBottom", t.value + "pt"); t.value = ""; }
   else if ("wpsize" in d || "wporient" in d || "wpmargin" in d) {
